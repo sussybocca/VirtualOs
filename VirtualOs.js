@@ -839,7 +839,19 @@ class GPU74Bit {
         this.mouseX=0; this.mouseY=0; this.mouseLeft=false; this.mouseRight=false; this.mouseMiddle=false;
         this.keys = new Array(256).fill(false);
     }
-    addDimension(dim) { this.dimensions.set(dim.name, dim); this.frames.set(dim.name, dim.createFrame(this.width, this.height)); if (!this.activeDim) this.activeDim = dim.name; }
+    addDimension(dim) { 
+        this.dimensions.set(dim.name, dim); 
+        const frame = dim.createFrame(this.width, this.height);
+        if (dim.name === '2D' && frame.set) {
+            for (let y = 0; y < this.height; y++) {
+                for (let x = 0; x < this.width; x++) {
+                    frame.set(x, y, (x ^ y) % 16);
+                }
+            }
+        }
+        this.frames.set(dim.name, frame); 
+        if (!this.activeDim) this.activeDim = dim.name; 
+    }
     getAvailableDimensions() { return Array.from(this.dimensions.keys()); }
     setActiveDimension(name) { if (!this.dimensions.has(name)) throw new Error('Dimension not found'); this.activeDim = name; }
     getActiveDimension() { return this.dimensions.get(this.activeDim); }
