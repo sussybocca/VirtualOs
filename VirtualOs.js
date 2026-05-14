@@ -274,12 +274,12 @@ class VOSConfigLoader {
 // ──────────────────────────────────────────────
 class Bus {
     constructor() {
+        this.__ioDevices = {};
         this.pages = new Map();
         this.mmu = new EmulatedMMU(this);
         this.dma = new EmulatedDMA(this);
         this.diskController = new EmulatedDiskController(this);
         this.networkController = new EmulatedNetworkController(this);
-        this.__ioDevices = {};
         this.totalReads = 0;
         this.totalWrites = 0;
         this.pageSize = 4096;
