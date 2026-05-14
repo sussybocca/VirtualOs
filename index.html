@@ -2,390 +2,67 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VirtualOS 74-Bit – Full Emulated Desktop</title>
+    <title>VirtualOS 74-Bit Test</title>
     <style>
-        :root {
-            --bg: #0a0a0f; --panel: #12121a; --border: #2a2a35;
-            --text: #c0c0d0; --accent: #00cc88; --danger: #ff4444; --warn: #ffaa00;
-        }
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body {
-            background: var(--bg); color: var(--text);
-            font-family: 'Segoe UI', system-ui, sans-serif;
-            min-height: 100vh; display: flex; justify-content: center; align-items: center;
-            padding: 20px;
-        }
-        .desktop {
-            background: var(--panel); border: 2px solid var(--border);
-            border-radius: 16px; padding: 20px; width: 900px;
-        }
-        .titlebar {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
-        }
-        .titlebar h1 { color: var(--accent); font-size: 16px; }
-        .led { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-        .led.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-        .led.off { background: #333; }
-        .main-area { display: flex; gap: 16px; }
-        .screen-panel { flex: 0 0 512px; }
-        .screen-panel canvas {
-            border: 2px solid #444; image-rendering: pixelated;
-            width: 512px; height: 512px; background: #000; cursor: none; border-radius: 4px;
-        }
-        .info-panel {
-            flex: 1; display: flex; flex-direction: column; gap: 8px;
-            font-family: 'Courier New', monospace; font-size: 11px;
-        }
-        .status-bar {
-            background: #000; border: 1px solid #333; border-radius: 6px;
-            padding: 8px; color: var(--accent);
-        }
-        .btn-row { display: flex; gap: 4px; flex-wrap: wrap; }
-        .btn {
-            padding: 6px 12px; border: 1px solid var(--accent); background: transparent;
-            color: var(--accent); border-radius: 4px; cursor: pointer;
-            font-family: inherit; font-size: 10px;
-        }
-        .btn:hover { background: rgba(0,200,100,0.15); }
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
-        .btn.primary { background: var(--accent); color: #000; font-weight: bold; }
-        .btn.warn { border-color: var(--warn); color: var(--warn); }
-        .btn.danger { border-color: var(--danger); color: var(--danger); }
+        body { background:#0a0a0f; color:#c0c0d0; font-family:monospace; padding:20px; }
+        canvas { border:2px solid #444; image-rendering:pixelated; width:512px; height:512px; background:#000; }
+        .bar { background:#000; border:1px solid #333; padding:8px; margin-top:8px; font-size:11px; color:#00cc88; }
+        button { padding:6px 14px; margin:4px; border:1px solid #00cc88; background:transparent; color:#00cc88; cursor:pointer; }
+        button:disabled { opacity:0.3; }
     </style>
 </head>
 <body>
-    <div class="desktop">
-        <div class="titlebar">
-            <h1>🖥️ VirtualOS 74-Bit Desktop</h1>
-            <div>
-                <span class="led off" id="powerLed"></span>
-                <span id="statusText" style="font-size:11px;">OFFLINE</span>
-            </div>
-        </div>
-        <div class="main-area">
-            <div class="screen-panel">
-                <canvas id="screen" width="256" height="256"></canvas>
-            </div>
-            <div class="info-panel">
-                <div class="status-bar" id="statusBar">
-                    CPU: <span id="cpuInfo">-</span><br>
-                    GPU: <span id="gpuInfo">-</span><br>
-                    Mode: <span id="modeInfo">-</span><br>
-                    FPS: <span id="fpsInfo">0</span> | Frame: <span id="frameInfo">0</span><br>
-                    Mouse: <span id="mouseInfo">-</span> | Keys: <span id="keyInfo">-</span><br>
-                    RAM: <span id="ramInfo">0 KB</span>
-                </div>
-                <div class="btn-row">
-                    <button class="btn primary" id="btnBoot" onclick="bootOS()">⚡ BOOT</button>
-                    <button class="btn" id="btnAddDim" onclick="addDims()" disabled>➕ DIMS</button>
-                    <button class="btn warn" id="btnSwitch" onclick="switchDim()" disabled>🔄 SWITCH</button>
-                    <button class="btn danger" id="btnOff" onclick="shutdown()" disabled>⏻ OFF</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <canvas id="screen" width="256" height="256"></canvas>
+    <div class="bar" id="log">[SYSTEM] Ready</div>
+    <button onclick="boot()">⚡ BOOT</button>
+    <button id="dimBtn" onclick="addDims()" disabled>➕ DIMS</button>
+    <button id="switchBtn" onclick="switchDim()" disabled>🔄 SWITCH</button>
+    <button id="offBtn" onclick="shutdown()" disabled>⏻ OFF</button>
 
     <script src="VirtualOs.js"></script>
     <script>
-        // ── State ────────────────────────────────
-        let os = null, booted = false, dimsAvailable = [];
-        const W = 256, H = 256;
-        const canvas = document.getElementById('screen');
-        const ctx = canvas.getContext('2d');
-        
-        // Emulated mouse
-        let mouseX = 128, mouseY = 128;
-        let mouseLeft = false, mouseRight = false;
-        const keysDown = new Set();
+        let os, booted, dims=[], W=256, H=256;
+        const c=document.getElementById('screen'), ctx=c.getContext('2d');
+        const PAL=[[0,0,0],[255,255,255],[255,60,60],[60,255,60],[60,60,255],[255,255,60],[255,60,255],[60,255,255],[255,140,30],[140,60,255],[60,140,255],[255,140,200],[100,60,30],[200,180,150],[255,215,0],[80,80,80]];
+        let mx=128,my=128,ml=0,mr=0,keys=new Set();
+        function log(s){ const el=document.getElementById('log'); el.textContent=s; console.log(s); }
 
-        // ── 16-color palette (matching CSX) ────────
-        const PAL = [
-            [0,0,0],[255,255,255],[255,60,60],[60,255,60],[60,60,255],
-            [255,255,60],[255,60,255],[60,255,255],[255,140,30],[140,60,255],
-            [60,140,255],[255,140,200],[100,60,30],[200,180,150],[255,215,0],[80,80,80]
-        ];
-
-        // ── Helpers ──────────────────────────────
-        function $(id) { return document.getElementById(id); }
-        function hex(v) { return v.toString(16).padStart(4,'0'); }
-
-        // ── Console logger (to the emulated status bar) ──
-        function logToGPU(msg) {
-            console.log(msg);
-            const gpuInfo = $('gpuInfo');
-            if (gpuInfo) gpuInfo.textContent = msg;
-        }
-
-        // ── Boot ──────────────────────────────────
-        async function bootOS() {
-            if (typeof VirtualOS === 'undefined') { alert('VirtualOS.js not loaded!'); return; }
-            
-            logToGPU('[BOOT] Creating Kernel74...');
-            os = new VirtualOS.Kernel74();
-            
-            logToGPU('[BOOT] Switching to 74-bit...');
-            os.switchTo74Bit();
-            
-            const gpu = os.currentGPU;
-            logToGPU('[BOOT] GPU type: ' + gpu.constructor.name);
-            
-            // Add both dimensions
-            logToGPU('[BOOT] Adding dimensions...');
-            gpu.addDimension(new VirtualOS.Dimension2D());
-            gpu.addDimension(new VirtualOS.MixelDimension());
-            gpu.setActiveDimension('2D');
-            dimsAvailable = gpu.getAvailableDimensions();
-            logToGPU('[BOOT] Dimensions: ' + dimsAvailable.join(', '));
-            
-            // Power on - this starts GPU rendering at 60fps via setInterval in Kernel74.powerOn()
-            logToGPU('[BOOT] Powering on (GPU auto-starts at 60fps)...');
+        function boot(){
+            os=new VirtualOS.Kernel74(); os.switchTo74Bit();
+            const g=os.currentGPU;
+            g.addDimension(new VirtualOS.Dimension2D());
+            g.addDimension(new VirtualOS.MixelDimension());
+            g.setActiveDimension('2D'); dims=g.getAvailableDimensions();
             os.powerOn(new Uint8Array(256));
-            
-            booted = true;
-            $('powerLed').className = 'led on';
-            $('statusText').textContent = 'RUNNING';
-            $('btnBoot').disabled = true;
-            $('btnAddDim').disabled = false;
-            $('btnSwitch').disabled = false;
-            $('btnOff').disabled = false;
-            
-            // Start render loop
-            logToGPU('[BOOT] Starting render loop...');
-            requestAnimationFrame(renderLoop);
+            booted=true;
+            document.querySelectorAll('button').forEach(b=>b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'?b.disabled=true:b.disabled=false);
+            log('BOOTED - Mode:'+os.currentMode+' Dims:'+dims.join(','));
+            requestAnimationFrame(loop);
         }
+        function shutdown(){ os.powerOff(); os=null; booted=false; ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H); log('OFF'); document.querySelectorAll('button').forEach(b=>b.disabled=b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'); }
+        function addDims(){ if(!os)return; const g=os.currentGPU; if(!dims.includes('MixelSpace')) g.addDimension(new VirtualOS.MixelDimension()); dims=g.getAvailableDimensions(); log('Dims:'+dims.join(',')); }
+        function switchDim(){ if(!os)return; const g=os.currentGPU; g.setActiveDimension(dims.find(d=>d!==g.activeDim)||dims[0]); log('Active:'+g.activeDim); }
 
-        function shutdown() {
-            logToGPU('[SHUTDOWN] Powering off...');
-            if (os) { 
-                os.powerOff(); 
-                os = null; 
-            }
-            booted = false;
-            $('powerLed').className = 'led off';
-            $('statusText').textContent = 'OFFLINE';
-            $('btnBoot').disabled = false;
-            $('btnAddDim').disabled = true;
-            $('btnSwitch').disabled = true;
-            $('btnOff').disabled = true;
-            ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
-            logToGPU('[SHUTDOWN] Complete');
+        let fc=0,ft=performance.now(),fps=0;
+        function loop(ts){
+            if(!booted||!os) return requestAnimationFrame(loop);
+            const g=os.currentGPU, img=ctx.createImageData(W,H);
+            // Always draw desktop
+            for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const p=(y*W+x)*4; const bg=y<20?1:y>H-20?2:0; const[c1,c2,c3]=PAL[bg]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; img.data[p+3]=255; }
+            // Mouse cursor
+            const cur=[[1,0,0,0,0,0,0,0],[1,1,0,0,0,0,0,0],[1,2,1,0,0,0,0,0],[1,2,2,1,0,0,0,0],[1,2,2,2,1,0,0,0],[1,2,2,2,2,1,0,0],[1,2,2,2,2,2,1,0],[1,2,2,2,2,2,2,1],[1,2,2,2,2,2,1,0],[0,1,2,2,1,2,1,0],[0,0,1,1,0,0,1,1],[0,0,0,0,0,0,0,1]];
+            for(let y=0;y<cur.length;y++) for(let x=0;x<cur[y].length;x++){ const v=cur[y][x]; if(!v)continue; const sx=mx+x,sy=my+y; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const cl=v===1?15:0; const[c1,c2,c3]=PAL[cl]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } }
+            ctx.putImageData(img,0,0);
+            fc++; if(ts-ft>=1000){ fps=fc; fc=0; ft=ts; }
+            log(`FPS:${fps} Frame:${g.frameCount} Mode:${os.currentMode} GPU:${g.activeDim} Mouse:${mx},${my} RAM:${Math.floor((os.bus?.usedRam||0)/1024)}KB`);
+            requestAnimationFrame(loop);
         }
-
-        // ── Dimension controls ───────────────────
-        function addDims() {
-            logToGPU('[DIMS] Add clicked');
-            if (!os || os.currentMode !== 'Bit74') { logToGPU('[DIMS] Not in 74-bit mode!'); return; }
-            const gpu = os.currentGPU;
-            if (!gpu.getAvailableDimensions().includes('MixelSpace')) {
-                gpu.addDimension(new VirtualOS.MixelDimension());
-                logToGPU('[DIMS] MixelSpace added');
-            }
-            dimsAvailable = gpu.getAvailableDimensions();
-            logToGPU('[DIMS] Available: ' + dimsAvailable.join(', '));
-        }
-
-        function switchDim() {
-            logToGPU('[SWITCH] Switch clicked');
-            if (!os || os.currentMode !== 'Bit74') { logToGPU('[SWITCH] Not in 74-bit mode!'); return; }
-            const gpu = os.currentGPU;
-            const dims = gpu.getAvailableDimensions();
-            const cur = gpu.activeDim;
-            const next = dims.find(d => d !== cur) || dims[0];
-            gpu.setActiveDimension(next);
-            logToGPU('[SWITCH] Active: ' + gpu.activeDim);
-        }
-
-        // ── Render loop ──────────────────────────
-        let lastTime = performance.now(), frameCount = 0, fps = 0;
-        let fpsCounter = 0, fpsTime = performance.now();
-
-        function renderLoop(timestamp) {
-            if (!booted || !os) return requestAnimationFrame(renderLoop);
-            
-            const gpu = os.currentGPU;
-            if (!gpu) return requestAnimationFrame(renderLoop);
-            
-            // Get framebuffer from active dimension
-            const fb = gpu.getFramebuffer();
-            const img = ctx.createImageData(W, H);
-            
-            if (fb && fb.length === W*H) {
-                for (let i = 0; i < W*H; i++) {
-                    const c = fb[i] % 16;
-                    const [r, g, b] = PAL[c];
-                    const p = i * 4;
-                    img.data[p] = r; img.data[p+1] = g; img.data[p+2] = b; img.data[p+3] = 255;
-                }
-            } else {
-                // Draw default desktop when no framebuffer
-                for (let y = 0; y < H; y++) {
-                    for (let x = 0; x < W; x++) {
-                        const i = (y * W + x) * 4;
-                        const bg = (y < 20) ? 1 : ((y > H-20) ? 2 : 0);
-                        const [r, g, b] = PAL[bg];
-                        img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
-                    }
-                }
-                drawText(img, 'VirtualOS 74-Bit', 8, 4, 7);
-                drawText(img, 'Desktop Ready', 8, 14, 3);
-                drawText(img, `Mode: ${os.currentMode}`, 8, 24, 5);
-                drawText(img, `Dims: ${dimsAvailable.join(', ') || 'none'}`, 8, 34, 5);
-            }
-            
-            // Draw emulated mouse cursor (white arrow)
-            drawMouseCursor(img, mouseX, mouseY);
-            
-            ctx.putImageData(img, 0, 0);
-            
-            // Update FPS
-            frameCount++; fpsCounter++;
-            if (timestamp - fpsTime >= 1000) {
-                fps = fpsCounter;
-                fpsCounter = 0;
-                fpsTime = timestamp;
-            }
-            
-            // Update status bar
-            const cpu = os.currentCPU;
-            $('cpuInfo').textContent = `CPU74Bit | IP:${cpu?.ip?.toString()||0} SP:${cpu?.sp?.toString()||0}`;
-            $('gpuInfo').textContent = `GPU74Bit | ${gpu.activeDim||'none'} | ${gpu.width}x${gpu.height}`;
-            $('modeInfo').textContent = os.currentMode;
-            $('fpsInfo').textContent = fps;
-            $('frameInfo').textContent = gpu.frameCount;
-            $('mouseInfo').textContent = `${mouseX},${mouseY} L:${mouseLeft?1:0}`;
-            $('keyInfo').textContent = [...keysDown].slice(0,4).join(',') || 'none';
-            $('ramInfo').textContent = `${Math.floor((os.bus?.usedRam||0)/1024)} KB`;
-            
-            requestAnimationFrame(renderLoop);
-        }
-
-        // ── Simple pixel text renderer ───────────
-        const FONT = {
-            'A':[0x1E,0x21,0x21,0x3F,0x21,0x21],'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],
-            'C':[0x1E,0x21,0x20,0x20,0x21,0x1E],'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],
-            'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F],'I':[0x1F,0x04,0x04,0x04,0x04,0x1F],
-            'L':[0x20,0x20,0x20,0x20,0x20,0x3F],'M':[0x21,0x33,0x2D,0x21,0x21,0x21],
-            'N':[0x21,0x31,0x29,0x25,0x23,0x21],'O':[0x1E,0x21,0x21,0x21,0x21,0x1E],
-            'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E],
-            'T':[0x3F,0x04,0x04,0x04,0x04,0x04],'U':[0x21,0x21,0x21,0x21,0x21,0x1E],
-            'V':[0x21,0x21,0x21,0x21,0x12,0x0C],'W':[0x21,0x21,0x21,0x2D,0x33,0x21],
-            'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],'Y':[0x21,0x12,0x0C,0x04,0x04,0x04],
-            '0':[0x1E,0x23,0x25,0x29,0x31,0x1E],'1':[0x0C,0x14,0x04,0x04,0x04,0x1F],
-            '2':[0x1E,0x21,0x02,0x0C,0x10,0x3F],'3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],
-            '4':[0x22,0x22,0x22,0x3F,0x02,0x02],'5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],
-            '6':[0x1E,0x20,0x3E,0x21,0x21,0x1E],'7':[0x3F,0x01,0x02,0x04,0x08,0x10],
-            '8':[0x1E,0x21,0x1E,0x21,0x21,0x1E],'9':[0x1E,0x21,0x21,0x1F,0x01,0x1E],
-            ' ':[0,0,0,0,0,0],':':[0,0x06,0x06,0,0x06,0x06],'-':[0,0,0x3F,0,0,0],
-            '|':[0x04,0x04,0x04,0x04,0x04,0x04],'[':[0x1E,0x10,0x10,0x10,0x10,0x1E],
-            ']':[0x3C,0x04,0x04,0x04,0x04,0x3C],'*':[0x14,0x08,0x3E,0x08,0x14,0],
-            '/':[0x01,0x02,0x04,0x08,0x10,0x20]
-        };
-
-        function drawText(img, text, x, y, color) {
-            const chars = text.toUpperCase().split('');
-            for (let ci = 0; ci < chars.length; ci++) {
-                const glyph = FONT[chars[ci]] || FONT[' '];
-                for (let row = 0; row < 6; row++) {
-                    for (let px = 0; px < 6; px++) {
-                        if (glyph[row] & (1 << (5 - px))) {
-                            const sx = x + ci * 7 + px;
-                            const sy = y + row;
-                            if (sx >= 0 && sx < W && sy >= 0 && sy < H) {
-                                const p = (sy * W + sx) * 4;
-                                const [r, g, b] = PAL[color % 16];
-                                img.data[p] = r; img.data[p+1] = g; img.data[p+2] = b;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        function drawMouseCursor(img, mx, my) {
-            const cursor = [
-                [1,0,0,0,0,0,0,0],
-                [1,1,0,0,0,0,0,0],
-                [1,2,1,0,0,0,0,0],
-                [1,2,2,1,0,0,0,0],
-                [1,2,2,2,1,0,0,0],
-                [1,2,2,2,2,1,0,0],
-                [1,2,2,2,2,2,1,0],
-                [1,2,2,2,2,2,2,1],
-                [1,2,2,2,2,2,1,0],
-                [0,1,2,2,1,2,1,0],
-                [0,0,1,1,0,0,1,1],
-                [0,0,0,0,0,0,0,1],
-            ];
-            for (let y = 0; y < cursor.length; y++) {
-                for (let x = 0; x < cursor[y].length; x++) {
-                    const v = cursor[y][x];
-                    if (v === 0) continue;
-                    const sx = mx + x, sy = my + y;
-                    if (sx >= 0 && sx < W && sy >= 0 && sy < H) {
-                        const p = (sy * W + sx) * 4;
-                        const color = v === 1 ? 15 : 0;
-                        const [r, g, b] = PAL[color];
-                        img.data[p] = r; img.data[p+1] = g; img.data[p+2] = b;
-                    }
-                }
-            }
-        }
-
-        // ── Input handling ───────────────────────
-        function getCanvasPos(e) {
-            const rect = canvas.getBoundingClientRect();
-            return {
-                x: Math.max(0, Math.min(W-1, Math.floor((e.clientX - rect.left) / (512/W)))),
-                y: Math.max(0, Math.min(H-1, Math.floor((e.clientY - rect.top) / (512/H))))
-            };
-        }
-
-        canvas.addEventListener('mousemove', (e) => {
-            const p = getCanvasPos(e);
-            mouseX = p.x; mouseY = p.y;
-            if (booted && os?.currentGPU) {
-                os.currentGPU.updateMouse(mouseX, mouseY, mouseLeft, mouseRight, false);
-            }
-        });
-
-        canvas.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            if (e.button === 0) mouseLeft = true;
-            if (e.button === 2) mouseRight = true;
-            if (booted && os?.currentGPU) {
-                os.currentGPU.updateMouse(mouseX, mouseY, mouseLeft, mouseRight, false);
-            }
-        });
-
-        canvas.addEventListener('mouseup', (e) => {
-            if (e.button === 0) mouseLeft = false;
-            if (e.button === 2) mouseRight = false;
-            if (booted && os?.currentGPU) {
-                os.currentGPU.updateMouse(mouseX, mouseY, mouseLeft, mouseRight, false);
-            }
-        });
-
-        canvas.addEventListener('contextmenu', e => e.preventDefault());
-
-        document.addEventListener('keydown', (e) => {
-            if (keysDown.has(e.code)) return;
-            keysDown.add(e.code);
-            if (booted && os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode & 0xFF);
-        });
-
-        document.addEventListener('keyup', (e) => {
-            keysDown.delete(e.code);
-            if (booted && os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode & 0xFF);
-        });
-
-        // ── Init ──────────────────────────────────
-        if (typeof VirtualOS === 'undefined') {
-            document.body.innerHTML = '<h1 style="color:#f44;text-align:center;margin-top:100px;">VirtualOS.js not found!<br>Place VirtualOs.js in the same directory.</h1>';
-        } else {
-            $('btnBoot').disabled = false;
-        }
+        c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect(); mx=Math.floor((e.clientX-r.left)/2); my=Math.floor((e.clientY-r.top)/2); if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
+        c.addEventListener('mousedown',e=>{ e.preventDefault(); if(e.button===0)ml=1; if(e.button===2)mr=1; if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
+        c.addEventListener('mouseup',e=>{ if(e.button===0)ml=0; if(e.button===2)mr=0; });
+        c.addEventListener('contextmenu',e=>e.preventDefault());
+        document.addEventListener('keydown',e=>{ if(keys.has(e.code))return; keys.add(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode&0xFF); });
+        document.addEventListener('keyup',e=>{ keys.delete(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode&0xFF); });
     </script>
 </body>
 </html>
