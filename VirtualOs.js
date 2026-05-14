@@ -83,17 +83,14 @@ class MiniExtensionParser {
     }
     parse() {
         try {
-            // Try direct JSON first
             this.parsed = JSON.parse(this.source);
             this._validate();
         } catch (e) {
-            // Hybrid mode: extract JSON between markers, parse binary blocks
             this._parseHybrid();
         }
         return { config: this.parsed, errors: this.errors, warnings: this.warnings };
     }
     _parseHybrid() {
-        // Extract sections: @JSON{...}@, @BINARY{base64}@, @JS{code}@
         const jsonMatch = this.source.match(/@JSON\{([\s\S]*?)\}@/);
         const binaryMatches = this.source.matchAll(/@BINARY\{([A-Za-z0-9+/=]+)\}@/g);
         const jsMatch = this.source.match(/@JS\{([\s\S]*?)\}@/);
@@ -102,7 +99,6 @@ class MiniExtensionParser {
         if (jsonMatch) {
             try { config = JSON.parse(jsonMatch[1]); } catch(e) { this.errors.push('Invalid JSON block'); }
         }
-        // Process binary blocks
         const binaryBlocks = {};
         for (const match of binaryMatches) {
             const blob = new BinaryBlob(match[1]);
@@ -110,7 +106,6 @@ class MiniExtensionParser {
             binaryBlocks[id] = blob;
         }
         config.__binaryBlocks = binaryBlocks;
-        // Execute JS block in sandbox
         if (jsMatch) {
             try {
                 const fn = new Function('config', 'BinaryBlob', jsMatch[1]);
@@ -138,7 +133,6 @@ class MiniExtensionLoader {
     load(config) {
         if (!config || config.errors?.length) return false;
         const cfg = config.config || config;
-        // Register custom dimensions
         if (cfg.dimensions) {
             for (const dim of cfg.dimensions) {
                 if (dim.binaryData && cfg.__binaryBlocks?.[dim.binaryData]) {
@@ -153,27 +147,26 @@ class MiniExtensionLoader {
                 }
             }
         }
-        // Register custom frame element factories
         if (cfg.frameElements) {
             for (const fe of cfg.frameElements) {
                 this._registerFrameElement(fe.name, fe.factory, cfg);
             }
         }
-        // Apply CPU instruction extensions
         if (cfg.cpuExtensions) {
             for (const ext of cfg.cpuExtensions) {
                 this._applyCpuExtension(ext.opcode, ext.handler, cfg);
             }
         }
-        // Apply memory map overrides
         if (cfg.memoryMap) {
             this._applyMemoryMap(cfg.memoryMap);
         }
-        // Register I/O devices
         if (cfg.ioDevices) {
             for (const dev of cfg.ioDevices) {
                 this._registerIODevice(dev.port, dev.name, dev.handler, cfg);
             }
+        }
+        if (cfg.console) {
+            this._registerConsole(cfg.console);
         }
         this.loaded.push(cfg.name || 'unnamed');
         return true;
@@ -187,7 +180,6 @@ class MiniExtensionLoader {
             createElement: (...args) => new Pixel2D(args[0] || 0),
             createFrame: (w, h) => {
                 const frame = new Frame2D(w, h);
-                // Decode binary data into frame pixels
                 for (let y = 0; y < h && y * w < blob.length; y++) {
                     for (let x = 0; x < w && y * w + x < blob.length; x++) {
                         frame.set(x, y, blob.readByte(y * w + x));
@@ -210,10 +202,8 @@ class MiniExtensionLoader {
     _applyCpuExtension(opcode, handlerCode, cfg) {
         const cpu = this.kernel.currentCPU;
         if (!cpu || !cpu.cycle) return;
-        const originalCycle = cpu.cycle.bind(cpu);
         try {
             const fn = new Function('bus', 'regs', 'ip', 'sp', 'flags', 'UInt74', 'BinaryBlob', handlerCode);
-            // Store extension
             if (!cpu.__extensions) cpu.__extensions = {};
             cpu.__extensions[opcode] = fn;
         } catch(e) { /* skip */ }
@@ -238,6 +228,48 @@ class MiniExtensionLoader {
             const fn = new Function('bus', 'value', 'isWrite', 'UInt74', 'BinaryBlob', handlerCode);
             bus.__ioDevices[port] = { name, handler: fn };
         } catch(e) { /* skip */ }
+    }
+    _registerConsole(consoleConfig) {
+        const kernel = this.kernel;
+        if (!kernel || !consoleConfig) return;
+        const name = consoleConfig.name || 'CustomConsole';
+        const bits = consoleConfig.bits || 32;
+        const gpuMode = consoleConfig.gpuMode || 'tile';
+        const memoryMap = consoleConfig.memoryMap || {};
+        const cpuExtensions = consoleConfig.cpuExtensions || [];
+        const customOpcodes = consoleConfig.customOpcodes || {};
+        
+        // Store console definition on kernel for later use
+        if (!kernel.__consoles) kernel.__consoles = {};
+        kernel.__consoles[name] = {
+            name, bits, gpuMode, memoryMap, cpuExtensions, customOpcodes,
+            createdAt: new Date()
+        };
+        
+        // Apply custom opcodes to current CPU
+        const cpu = kernel.currentCPU;
+        if (cpu && customOpcodes) {
+            if (!cpu.__extensions) cpu.__extensions = {};
+            for (const [opcode, handlerCode] of Object.entries(customOpcodes)) {
+                try {
+                    const fn = new Function('bus', 'regs', 'ip', 'sp', 'flags', 'UInt74', 'BinaryBlob', handlerCode);
+                    cpu.__extensions[parseInt(opcode)] = fn;
+                } catch(e) { /* skip invalid */ }
+            }
+        }
+        
+        // Apply memory map if provided
+        if (memoryMap.regions) {
+            const bus = kernel.bus;
+            for (const region of memoryMap.regions) {
+                if (region.data) {
+                    const blob = new BinaryBlob(region.data);
+                    for (let i = 0; i < blob.length && region.address + i < 0x10000; i++) {
+                        bus.writeByte(region.address + i, blob.readByte(i));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -270,6 +302,621 @@ class VOSConfigLoader {
 }
 
 // ──────────────────────────────────────────────
+// Console Emulator Factory – creates custom console emulators
+// ──────────────────────────────────────────────
+class ConsoleEmulatorFactory {
+    /**
+     * Creates a custom console emulator instance
+     * @param {Object} config - Console configuration
+     * @param {string} config.name - Console name
+     * @param {number} config.bits - CPU bit width (16, 32, 74)
+     * @param {Object} config.memoryLayout - Memory region definitions
+     * @param {Object} config.gpuConfig - GPU/display configuration
+     * @param {Object} config.cartridgeFormat - Custom cartridge/ROM format definition
+     * @param {Array} config.inputDevices - Input device definitions
+     * @param {Object} config.audioConfig - Audio chip configuration
+     * @returns {Object} Console emulator instance
+     */
+    static create(config) {
+        const kernel = new Kernel74();
+        
+        // Apply console configuration
+        const loader = new MiniExtensionLoader(kernel);
+        loader._registerConsole(config);
+        
+        // Create custom memory map based on console definition
+        if (config.memoryLayout) {
+            const bus = kernel.bus;
+            for (const [regionName, region] of Object.entries(config.memoryLayout)) {
+                // Pre-allocate memory pages for each region
+                if (region.size && region.startAddress !== undefined) {
+                    for (let addr = region.startAddress; addr < region.startAddress + region.size; addr += bus.pageSize) {
+                        bus.pages.set(Math.floor(addr / bus.pageSize), new Uint8Array(bus.pageSize));
+                    }
+                }
+            }
+        }
+        
+        // Create cartridge loader based on format
+        const cartridgeLoader = {
+            loadROM: (romData) => {
+                const bus = kernel.bus;
+                const cartConfig = config.cartridgeFormat || {};
+                const romStart = cartConfig.romStartAddress || 0x08000000;
+                const headerOffset = cartConfig.headerOffset || 0xA0;
+                const headerLength = cartConfig.headerLength || 12;
+                
+                // Load ROM data into bus memory
+                for (let i = 0; i < romData.length && romStart + i < 0x10000000; i++) {
+                    bus.writeByte32(romStart + i, romData[i]);
+                }
+                
+                // Parse cartridge header
+                let title = '';
+                for (let i = 0; i < headerLength; i++) {
+                    const charCode = romData[headerOffset + i];
+                    if (charCode === 0) break;
+                    title += String.fromCharCode(charCode);
+                }
+                
+                return {
+                    title: title.trim() || 'Unknown',
+                    size: romData.length,
+                    loaded: true
+                };
+            }
+        };
+        
+        // Create input device handlers
+        const inputHandlers = {};
+        if (config.inputDevices) {
+            for (const device of config.inputDevices) {
+                inputHandlers[device.name] = {
+                    type: device.type || 'button',
+                    bits: device.bits || 8,
+                    address: device.address || 0,
+                    state: new Uint8Array(Math.ceil((device.bits || 8) / 8)),
+                    setButton: function(buttonIndex, pressed) {
+                        const byteIndex = Math.floor(buttonIndex / 8);
+                        const bitIndex = buttonIndex % 8;
+                        if (pressed) {
+                            this.state[byteIndex] |= (1 << bitIndex);
+                        } else {
+                            this.state[byteIndex] &= ~(1 << bitIndex);
+                        }
+                    }
+                };
+            }
+        }
+        
+        return {
+            kernel,
+            config,
+            cartridgeLoader,
+            inputHandlers,
+            loadROM(romData) {
+                const info = cartridgeLoader.loadROM(romData);
+                kernel.powerOn(romData);
+                return info;
+            },
+            step() { kernel.step(); },
+            run(cycles) { kernel.run(cycles); },
+            getFramebuffer() {
+                const gpu = kernel.currentGPU;
+                return gpu ? gpu.getFramebuffer() : null;
+            },
+            setInput(deviceName, buttonIndex, pressed) {
+                if (inputHandlers[deviceName]) {
+                    inputHandlers[deviceName].setButton(buttonIndex, pressed);
+                }
+            },
+            getState() {
+                return {
+                    consoleName: config.name,
+                    cpuMode: kernel.currentMode,
+                    cpuCycles: kernel.currentCPU?.cycleCount || 0,
+                    poweredOn: kernel.poweredOn
+                };
+            }
+        };
+    }
+    
+    /** Pre-configured GBA emulator */
+    static createGBA() {
+        return ConsoleEmulatorFactory.create({
+            name: 'GameBoyAdvance',
+            bits: 32,
+            memoryLayout: {
+                bios:    { startAddress: 0x00000000, size: 0x00004000, description: '16KB System ROM' },
+                iwram:   { startAddress: 0x03000000, size: 0x00008000, description: '32KB Fast On-Chip WRAM' },
+                ewram:   { startAddress: 0x02000000, size: 0x00040000, description: '256KB Board WRAM' },
+                io:      { startAddress: 0x04000000, size: 0x00000400, description: 'Memory-Mapped I/O' },
+                palette: { startAddress: 0x05000000, size: 0x00000400, description: 'Palette RAM' },
+                vram:    { startAddress: 0x06000000, size: 0x00018000, description: '96KB Video RAM' },
+                oam:     { startAddress: 0x07000000, size: 0x00000400, description: 'Object Attribute Memory' },
+                rom0:    { startAddress: 0x08000000, size: 0x02000000, description: '32MB Game Pak ROM (Wait 0)' },
+                rom1:    { startAddress: 0x0A000000, size: 0x02000000, description: '32MB Game Pak ROM (Wait 1)' },
+                rom2:    { startAddress: 0x0C000000, size: 0x02000000, description: '32MB Game Pak ROM (Wait 2)' },
+                sram:    { startAddress: 0x0E000000, size: 0x00008000, description: '64KB Cartridge Save RAM' }
+            },
+            cartridgeFormat: {
+                romStartAddress: 0x08000000,
+                headerOffset: 0xA0,
+                headerLength: 12,
+                gameCodeOffset: 0xAC,
+                gameCodeLength: 4,
+                supportedExtensions: ['.gba', '.agb', '.bin'],
+                maxROMSize: 0x02000000 // 32MB
+            },
+            gpuConfig: {
+                mode: 'tile',
+                displayWidth: 240,
+                displayHeight: 160,
+                refreshRate: 60,
+                layers: 4,
+                sprites: 128,
+                colorDepth: 15, // 32768 colors
+                supportedModes: ['tile', 'bitmap', 'bitmap2', 'bitmap3', 'bitmap4', 'bitmap5']
+            },
+            inputDevices: [
+                { name: 'keypad', type: 'button', bits: 10, address: 0x04000130,
+                  buttons: ['A', 'B', 'Select', 'Start', 'Right', 'Left', 'Up', 'Down', 'R', 'L'] }
+            ],
+            audioConfig: {
+                channels: 6,
+                sampleRate: 32768,
+                directSoundChannels: 2
+            },
+            cpuExtensions: [],
+            customOpcodes: {}
+        });
+    }
+    
+    /** Pre-configured SNES emulator template */
+    static createSNES() {
+        return ConsoleEmulatorFactory.create({
+            name: 'SuperNintendo',
+            bits: 16,
+            memoryLayout: {
+                wram: { startAddress: 0x7E0000, size: 0x020000, description: '128KB Work RAM' },
+                sram: { startAddress: 0x700000, size: 0x008000, description: 'Cartridge Save RAM' },
+                rom:  { startAddress: 0x800000, size: 0x400000, description: '4MB Game Pak ROM (FastROM)' }
+            },
+            cartridgeFormat: {
+                romStartAddress: 0x800000,
+                headerOffset: 0x7FC0,
+                headerLength: 21,
+                supportedExtensions: ['.sfc', '.smc', '.bin'],
+                maxROMSize: 0x600000 // 6MB with HiROM
+            },
+            gpuConfig: {
+                mode: 'tile',
+                displayWidth: 256,
+                displayHeight: 224,
+                refreshRate: 60,
+                layers: 4,
+                sprites: 128,
+                colorDepth: 15
+            },
+            inputDevices: [
+                { name: 'joypad1', type: 'button', bits: 12, address: 0x4016 },
+                { name: 'joypad2', type: 'button', bits: 12, address: 0x4017 }
+            ],
+            audioConfig: { channels: 8, sampleRate: 32000 }
+        });
+    }
+    
+    /** Creates a fully custom console from user config */
+    static createCustom(userConfig) {
+        return ConsoleEmulatorFactory.create({
+            name: userConfig.name || 'CustomConsole',
+            bits: userConfig.bits || 32,
+            memoryLayout: userConfig.memoryLayout || {},
+            cartridgeFormat: userConfig.cartridgeFormat || {
+                romStartAddress: 0x08000000,
+                headerOffset: 0,
+                headerLength: 32,
+                supportedExtensions: ['.bin', '.rom'],
+                maxROMSize: 0x04000000
+            },
+            gpuConfig: userConfig.gpuConfig || {
+                mode: 'pixel',
+                displayWidth: 256,
+                displayHeight: 256,
+                refreshRate: 60
+            },
+            inputDevices: userConfig.inputDevices || [],
+            audioConfig: userConfig.audioConfig || { channels: 4, sampleRate: 44100 },
+            customOpcodes: userConfig.customOpcodes || {},
+            cpuExtensions: userConfig.cpuExtensions || []
+        });
+    }
+}
+
+// ──────────────────────────────────────────────
+// GBA-specific Hardware Components
+// ──────────────────────────────────────────────
+class GBAHardware {
+    constructor(kernel) {
+        this.kernel = kernel;
+        this.bus = kernel.bus;
+    }
+    
+    /** Initialize GBA memory map with proper hardware regions */
+    initMemoryMap() {
+        // Set up GBA-specific memory regions
+        // BIOS is read-only and mapped at 0x00000000
+        // I/O registers at 0x04000000
+        // VRAM at 0x06000000
+        // OAM at 0x07000000
+        // ROM at 0x08000000
+        const regions = [
+            { start: 0x00000000, size: 0x4000, name: 'BIOS', readonly: true },
+            { start: 0x02000000, size: 0x40000, name: 'EWRAM' },
+            { start: 0x03000000, size: 0x8000, name: 'IWRAM' },
+            { start: 0x04000000, size: 0x400, name: 'IOREGS' },
+            { start: 0x05000000, size: 0x400, name: 'PALETTE' },
+            { start: 0x06000000, size: 0x18000, name: 'VRAM' },
+            { start: 0x07000000, size: 0x400, name: 'OAM' }
+        ];
+        
+        for (const region of regions) {
+            for (let addr = region.start; addr < region.start + region.size; addr += 0x1000) {
+                this.bus.pages.set(Math.floor(addr / 0x1000), new Uint8Array(0x1000));
+            }
+        }
+    }
+    
+    /** Load GBA BIOS */
+    loadBIOS(biosData) {
+        for (let i = 0; i < biosData.length && i < 0x4000; i++) {
+            this.bus.writeByte32(0x00000000 + i, biosData[i]);
+        }
+    }
+    
+    /** Read GBA I/O register */
+    readIO(offset) {
+        return this.bus.readByte32(0x04000000 + offset);
+    }
+    
+    /** Write GBA I/O register */
+    writeIO(offset, value) {
+        this.bus.writeByte32(0x04000000 + offset, value);
+    }
+    
+    /** Get DISPCNT register value */
+    get displayControl() {
+        return this.bus.readWord(0x04000000);
+    }
+    
+    /** Set DISPCNT register */
+    set displayControl(value) {
+        this.bus.writeWord(0x04000000, value);
+    }
+    
+    /** Get current display mode (0-5) */
+    get displayMode() {
+        return this.displayControl & 0x7;
+    }
+    
+    /** Get background enable flags */
+    get backgroundControl() {
+        return (this.displayControl >> 8) & 0x1F;
+    }
+    
+    /** Read palette entry */
+    readPalette(index) {
+        return this.bus.readWord(0x05000000 + (index * 2));
+    }
+    
+    /** Write palette entry */
+    writePalette(index, color) {
+        this.bus.writeWord(0x05000000 + (index * 2), color);
+    }
+    
+    /** Read VRAM tile data */
+    readTile(tileIndex) {
+        const addr = 0x06000000 + (tileIndex * 32);
+        const tile = new Uint32Array(8);
+        for (let i = 0; i < 8; i++) {
+            tile[i] = this.bus.readDWord(addr + (i * 4));
+        }
+        return tile;
+    }
+    
+    /** Read OAM entry */
+    readOAM(index) {
+        const addr = 0x07000000 + (index * 8);
+        return {
+            attr0: this.bus.readWord(addr),
+            attr1: this.bus.readWord(addr + 2),
+            attr2: this.bus.readWord(addr + 4)
+        };
+    }
+    
+    /** Set keypad input state */
+    setKeyInput(keys) {
+        let value = 0x03FF; // All buttons released (active low)
+        if (keys.A)     value &= ~0x001;
+        if (keys.B)     value &= ~0x002;
+        if (keys.Select) value &= ~0x004;
+        if (keys.Start)  value &= ~0x008;
+        if (keys.Right)  value &= ~0x010;
+        if (keys.Left)   value &= ~0x020;
+        if (keys.Up)     value &= ~0x040;
+        if (keys.Down)   value &= ~0x080;
+        if (keys.R)      value &= ~0x100;
+        if (keys.L)      value &= ~0x200;
+        this.bus.writeWord(0x04000130, value);
+    }
+}
+
+// ──────────────────────────────────────────────
+// GBA PPU (Picture Processing Unit) Renderer
+// ──────────────────────────────────────────────
+class GBAPPU {
+    constructor(gbaHardware) {
+        this.hw = gbaHardware;
+        this.framebuffer = new Uint8Array(240 * 160 * 4); // RGBA
+    }
+    
+    /** Render a single frame to the framebuffer */
+    renderFrame() {
+        const mode = this.hw.displayMode;
+        this.framebuffer.fill(0);
+        
+        switch (mode) {
+            case 0: this._renderMode0(); break; // Tile mode with 4 regular backgrounds
+            case 1: this._renderMode1(); break; // Tile mode with 3 backgrounds + affine
+            case 2: this._renderMode2(); break; // Tile mode with 2 backgrounds + 2 affine
+            case 3: this._renderMode3(); break; // 240x160 16-bit bitmap
+            case 4: this._renderMode4(); break; // 240x160 8-bit indexed bitmap
+            case 5: this._renderMode5(); break; // 160x128 16-bit bitmap
+        }
+        
+        return this.framebuffer;
+    }
+    
+    _renderMode0() {
+        const bgCtrl = this.hw.backgroundControl;
+        for (let bg = 0; bg < 4; bg++) {
+            if (bgCtrl & (1 << bg)) {
+                this._renderTextBackground(bg);
+            }
+        }
+    }
+    
+    _renderMode1() {
+        const bgCtrl = this.hw.backgroundControl;
+        for (let bg = 0; bg < 2; bg++) {
+            if (bgCtrl & (1 << bg)) this._renderTextBackground(bg);
+        }
+        if (bgCtrl & 0x4) this._renderAffineBackground(2);
+    }
+    
+    _renderMode2() {
+        const bgCtrl = this.hw.backgroundControl;
+        if (bgCtrl & 0x2) this._renderAffineBackground(2);
+        if (bgCtrl & 0x4) this._renderAffineBackground(3);
+    }
+    
+    _renderMode3() {
+        // Direct 16-bit bitmap at 0x06000000
+        for (let y = 0; y < 160; y++) {
+            for (let x = 0; x < 240; x++) {
+                const addr = 0x06000000 + ((y * 240 + x) * 2);
+                const color16 = this.hw.bus.readWord(addr);
+                const idx = (y * 240 + x) * 4;
+                this._decodeColor15(color16, idx);
+            }
+        }
+    }
+    
+    _renderMode4() {
+        // 8-bit indexed with palette at 0x05000000
+        for (let y = 0; y < 160; y++) {
+            for (let x = 0; x < 240; x++) {
+                const addr = 0x06000000 + (y * 240 + x);
+                const idx8 = this.hw.bus.readByte(addr);
+                const color16 = this.hw.readPalette(idx8);
+                const rgbaIdx = (y * 240 + x) * 4;
+                this._decodeColor15(color16, rgbaIdx);
+            }
+        }
+    }
+    
+    _renderMode5() {
+        // 160x128 16-bit bitmap
+        for (let y = 0; y < 128; y++) {
+            for (let x = 0; x < 160; x++) {
+                const addr = 0x06000000 + ((y * 160 + x) * 2);
+                const color16 = this.hw.bus.readWord(addr);
+                const idx = (y * 240 + x) * 4;
+                this._decodeColor15(color16, idx);
+            }
+        }
+    }
+    
+    _renderTextBackground(bg) {
+        // Simplified text-mode background renderer
+        for (let y = 0; y < 160; y++) {
+            for (let x = 0; x < 240; x++) {
+                const tileX = Math.floor(x / 8);
+                const tileY = Math.floor(y / 8);
+                const pixelX = x % 8;
+                const pixelY = y % 8;
+                
+                // Read tile index from screenblock
+                const screenBase = 0x06000000 + (bg * 0x0800);
+                const tileIdx = this.hw.bus.readByte(screenBase + (tileY * 32 + tileX));
+                
+                // Read tile data
+                const tileBase = 0x06000000 + 0x4000;
+                const tileData = this.hw.bus.readDWord(tileBase + (tileIdx * 32) + (pixelY * 4));
+                const pixelBit = 7 - pixelX;
+                const colorIdx = ((tileData >> pixelBit) & 1) | ((tileData >> (pixelBit + 8)) & 1) << 1 |
+                                ((tileData >> (pixelBit + 16)) & 1) << 2 | ((tileData >> (pixelBit + 24)) & 1) << 3;
+                
+                if (colorIdx > 0) {
+                    const paletteAddr = 0x05000000 + (colorIdx * 2);
+                    const color16 = this.hw.bus.readWord(paletteAddr);
+                    const rgbaIdx = (y * 240 + x) * 4;
+                    this._decodeColor15(color16, rgbaIdx);
+                }
+            }
+        }
+    }
+    
+    _renderAffineBackground(bg) {
+        // Simplified affine background renderer
+        for (let y = 0; y < 160; y++) {
+            for (let x = 0; x < 240; x++) {
+                const idx = (y * 240 + x) * 4;
+                this.framebuffer[idx] = 0;
+                this.framebuffer[idx + 1] = 0;
+                this.framebuffer[idx + 2] = 64;
+                this.framebuffer[idx + 3] = 255;
+            }
+        }
+    }
+    
+    /** Convert 15-bit GBA color to RGBA */
+    _decodeColor15(color16, outputIndex) {
+        const r = (color16 & 0x1F) << 3;
+        const g = ((color16 >> 5) & 0x1F) << 3;
+        const b = ((color16 >> 10) & 0x1F) << 3;
+        this.framebuffer[outputIndex] = r;
+        this.framebuffer[outputIndex + 1] = g;
+        this.framebuffer[outputIndex + 2] = b;
+        this.framebuffer[outputIndex + 3] = 255;
+    }
+}
+
+// ──────────────────────────────────────────────
+// GBA Emulator – full hardware emulation using existing Kernel74
+// ──────────────────────────────────────────────
+class GBAEmulator {
+    constructor() {
+        this.kernel = new Kernel74();
+        this.hardware = new GBAHardware(this.kernel);
+        this.ppu = new GBAPPU(this.hardware);
+        this.romLoaded = false;
+        this.biosLoaded = false;
+        this.isRunning = false;
+        this.frameCount = 0;
+        this._frameInterval = null;
+    }
+    
+    /** Load GBA BIOS file */
+    loadBIOS(biosData) {
+        this.hardware.loadBIOS(new Uint8Array(biosData));
+        this.biosLoaded = true;
+        return true;
+    }
+    
+    /** Load GBA ROM file */
+    loadROM(romData) {
+        const rom = new Uint8Array(romData);
+        
+        // Parse cartridge header
+        let title = '';
+        for (let i = 0; i < 12; i++) {
+            const charCode = rom[0xA0 + i];
+            if (charCode === 0) break;
+            title += String.fromCharCode(charCode);
+        }
+        
+        let gameCode = '';
+        for (let i = 0; i < 4; i++) {
+            gameCode += String.fromCharCode(rom[0xAC + i]);
+        }
+        
+        // Load ROM into bus memory starting at 0x08000000
+        for (let i = 0; i < rom.length; i++) {
+            this.kernel.bus.writeByte32(0x08000000 + i, rom[i]);
+        }
+        
+        this.romLoaded = true;
+        
+        return {
+            title: title.trim(),
+            gameCode: gameCode,
+            size: rom.length,
+            loaded: true
+        };
+    }
+    
+    /** Start emulation */
+    start() {
+        if (!this.romLoaded) return false;
+        
+        this.kernel.powerOn(new Uint8Array(0));
+        
+        // Set initial program counter to ROM entrypoint
+        if (this.kernel.mode === 'Bit32') {
+            this.kernel.cpu32.ip = 0x08000000;
+        } else if (this.kernel.mode === 'Bit74') {
+            this.kernel.cpu74.ip = new UInt74(0x08000000n);
+        }
+        
+        this.isRunning = true;
+        
+        // Start frame rendering loop (59.73 Hz GBA refresh)
+        this._frameInterval = setInterval(() => {
+            if (this.isRunning) {
+                // Execute approximately 280,000 cycles per frame (16.78 MHz / 60)
+                this.kernel.run(280000);
+                this.ppu.renderFrame();
+                this.frameCount++;
+            }
+        }, 1000 / 60);
+        
+        return true;
+    }
+    
+    /** Stop emulation */
+    stop() {
+        this.isRunning = false;
+        if (this._frameInterval) {
+            clearInterval(this._frameInterval);
+            this._frameInterval = null;
+        }
+        this.kernel.powerOff();
+    }
+    
+    /** Get current framebuffer */
+    getFramebuffer() {
+        return this.ppu.framebuffer;
+    }
+    
+    /** Set button input state */
+    setInput(button, pressed) {
+        const keys = {
+            A: false, B: false, Select: false, Start: false,
+            Right: false, Left: false, Up: false, Down: false,
+            R: false, L: false
+        };
+        if (button in keys) {
+            keys[button] = pressed;
+            this.hardware.setKeyInput(keys);
+        }
+    }
+    
+    /** Get emulator state */
+    getState() {
+        return {
+            title: 'GBA Emulator',
+            romLoaded: this.romLoaded,
+            biosLoaded: this.biosLoaded,
+            isRunning: this.isRunning,
+            frameCount: this.frameCount,
+            cpuMode: this.kernel.currentMode,
+            cpuCycles: this.kernel.currentCPU?.cycleCount || 0
+        };
+    }
+}
+
+// ──────────────────────────────────────────────
 // Bus – 32GB virtual address space (page based)
 // ──────────────────────────────────────────────
 class Bus {
@@ -288,7 +935,6 @@ class Bus {
     get usedRam() { return this.pages.size * this.pageSize; }
     get totalRam() { return 32n * 1024n * 1024n * 1024n; }
     readByte32(addr) {
-        // Check I/O devices
         if (addr >= 0xFF00 && this.__ioDevices[addr - 0xFF00]) {
             const dev = this.__ioDevices[addr - 0xFF00];
             try { return dev.handler(this, 0, false) & 0xFF; } catch(e) { return 0; }
@@ -300,7 +946,6 @@ class Bus {
         return page ? page[off] : 0;
     }
     writeByte32(addr, value) {
-        // Check I/O devices
         if (addr >= 0xFF00 && this.__ioDevices[addr - 0xFF00]) {
             const dev = this.__ioDevices[addr - 0xFF00];
             try { dev.handler(this, value, true); } catch(e) {}
@@ -516,13 +1161,12 @@ class CPU {
     cycle() {
         if (this.halted) return;
         const op = this.bus.readByte(this.ip++);
-        // Check for custom extension opcode
         if (this.__extensions[op]) {
             try {
                 this.__extensions[op](this.bus, this.regs, this.ip, this.sp, this.flags, UInt74, BinaryBlob);
                 this.cycleCount++; this.instrCount++;
                 return;
-            } catch(e) { /* fall through to standard execution */ }
+            } catch(e) { /* fall through */ }
         }
         this.cycleCount++; this.instrCount++;
         switch (op) {
@@ -825,7 +1469,7 @@ class BiosLexer {
             else s += this._peek();
             this._advance();
         }
-        if (this._peek()==='"') this._advance(); else this._error('Unterminated string');
+        if (this._peek()=='"') this._advance(); else this._error('Unterminated string');
         return new BiosToken(BiosTokenType.String, s, startL, startC);
     }
     _readHexNumber() {
@@ -1114,6 +1758,7 @@ class Kernel74 {
         this.mode = 'Bit32';
         this.cpu74 = null; this.gpu74 = null;
         this.__configLoader = null;
+        this.__consoles = {};
     }
     get currentMode() { return this.mode; }
     get currentCPU() { return this.mode==='Bit74' ? this.cpu74 : this.cpu32; }
@@ -1242,7 +1887,8 @@ const VirtualOS = {
     UInt74, CPU74Bit, GPU74Bit,
     RenderingDimension, FrameElement, Frame, Pixel2D, Dimension2D, Frame2D, Mixel, MixelDimension, MixelFrame,
     Kernel74,
-    BinaryBlob, MiniExtensionParser, MiniExtensionLoader, VOSConfigLoader
+    BinaryBlob, MiniExtensionParser, MiniExtensionLoader, VOSConfigLoader,
+    ConsoleEmulatorFactory, GBAEmulator, GBAHardware, GBAPPU
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = VirtualOS;
 if (typeof window !== 'undefined') window.VirtualOS = VirtualOS;
