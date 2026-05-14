@@ -111,24 +111,37 @@
         function $(id) { return document.getElementById(id); }
         function hex(v) { return v.toString(16).padStart(4,'0'); }
 
+        // ── Console logger (to the emulated status bar) ──
+        function logToGPU(msg) {
+            console.log(msg);
+            const gpuInfo = $('gpuInfo');
+            if (gpuInfo) gpuInfo.textContent = msg;
+        }
+
         // ── Boot ──────────────────────────────────
         async function bootOS() {
             if (typeof VirtualOS === 'undefined') { alert('VirtualOS.js not loaded!'); return; }
             
+            logToGPU('[BOOT] Creating Kernel74...');
             os = new VirtualOS.Kernel74();
+            
+            logToGPU('[BOOT] Switching to 74-bit...');
             os.switchTo74Bit();
             
             const gpu = os.currentGPU;
+            logToGPU('[BOOT] GPU type: ' + gpu.constructor.name);
             
             // Add both dimensions
+            logToGPU('[BOOT] Adding dimensions...');
             gpu.addDimension(new VirtualOS.Dimension2D());
             gpu.addDimension(new VirtualOS.MixelDimension());
             gpu.setActiveDimension('2D');
             dimsAvailable = gpu.getAvailableDimensions();
+            logToGPU('[BOOT] Dimensions: ' + dimsAvailable.join(', '));
             
-            // Start rendering
+            // Power on - this starts GPU rendering at 60fps via setInterval in Kernel74.powerOn()
+            logToGPU('[BOOT] Powering on (GPU auto-starts at 60fps)...');
             os.powerOn(new Uint8Array(256));
-            gpu.startRendering(30);
             
             booted = true;
             $('powerLed').className = 'led on';
@@ -139,11 +152,16 @@
             $('btnOff').disabled = false;
             
             // Start render loop
+            logToGPU('[BOOT] Starting render loop...');
             requestAnimationFrame(renderLoop);
         }
 
         function shutdown() {
-            if (os) { os.powerOff(); os = null; }
+            logToGPU('[SHUTDOWN] Powering off...');
+            if (os) { 
+                os.powerOff(); 
+                os = null; 
+            }
             booted = false;
             $('powerLed').className = 'led off';
             $('statusText').textContent = 'OFFLINE';
@@ -152,25 +170,31 @@
             $('btnSwitch').disabled = true;
             $('btnOff').disabled = true;
             ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+            logToGPU('[SHUTDOWN] Complete');
         }
 
         // ── Dimension controls ───────────────────
         function addDims() {
-            if (!os || os.currentMode !== 'Bit74') return;
+            logToGPU('[DIMS] Add clicked');
+            if (!os || os.currentMode !== 'Bit74') { logToGPU('[DIMS] Not in 74-bit mode!'); return; }
             const gpu = os.currentGPU;
             if (!gpu.getAvailableDimensions().includes('MixelSpace')) {
                 gpu.addDimension(new VirtualOS.MixelDimension());
+                logToGPU('[DIMS] MixelSpace added');
             }
             dimsAvailable = gpu.getAvailableDimensions();
+            logToGPU('[DIMS] Available: ' + dimsAvailable.join(', '));
         }
 
         function switchDim() {
-            if (!os || os.currentMode !== 'Bit74') return;
+            logToGPU('[SWITCH] Switch clicked');
+            if (!os || os.currentMode !== 'Bit74') { logToGPU('[SWITCH] Not in 74-bit mode!'); return; }
             const gpu = os.currentGPU;
             const dims = gpu.getAvailableDimensions();
             const cur = gpu.activeDim;
             const next = dims.find(d => d !== cur) || dims[0];
             gpu.setActiveDimension(next);
+            logToGPU('[SWITCH] Active: ' + gpu.activeDim);
         }
 
         // ── Render loop ──────────────────────────
@@ -195,17 +219,15 @@
                     img.data[p] = r; img.data[p+1] = g; img.data[p+2] = b; img.data[p+3] = 255;
                 }
             } else {
-                // Draw default desktop
+                // Draw default desktop when no framebuffer
                 for (let y = 0; y < H; y++) {
                     for (let x = 0; x < W; x++) {
                         const i = (y * W + x) * 4;
-                        // Background gradient
                         const bg = (y < 20) ? 1 : ((y > H-20) ? 2 : 0);
                         const [r, g, b] = PAL[bg];
                         img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
                     }
                 }
-                // Draw title text (simple pixel text)
                 drawText(img, 'VirtualOS 74-Bit', 8, 4, 7);
                 drawText(img, 'Desktop Ready', 8, 14, 3);
                 drawText(img, `Mode: ${os.currentMode}`, 8, 24, 5);
