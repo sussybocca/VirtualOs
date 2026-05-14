@@ -12,13 +12,20 @@
     </style>
 </head>
 <body>
+    <div id="errLog" style="background:#300;color:#f44;font-size:9px;padding:4px;max-height:100px;overflow:auto;display:none;"></div>
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            const el = document.getElementById('errLog');
+            el.style.display = 'block';
+            el.textContent += '❌ Line ' + line + ': ' + msg + '\n';
+        };
+    </script>
     <canvas id="screen" width="256" height="256"></canvas>
     <div class="bar" id="log">[SYSTEM] Ready</div>
     <button onclick="boot()">⚡ BOOT</button>
     <button id="dimBtn" onclick="addDims()" disabled>➕ DIMS</button>
     <button id="switchBtn" onclick="switchDim()" disabled>🔄 SWITCH</button>
     <button id="offBtn" onclick="shutdown()" disabled>⏻ OFF</button>
-
     <script src="VirtualOs.js"></script>
     <script>
         let os, booted, dims=[], W=256, H=256;
