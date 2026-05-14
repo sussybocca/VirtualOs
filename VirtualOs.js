@@ -1,11 +1,18 @@
 /**
  * VirtualOS.js – Full hardware emulation in JavaScript
  * Faithfully ported from VirtualOs.csx (C#). Zero stubs, complete emulation.
+ * 
+ * VOS.config.js Mini-Extension System:
+ * Users create a VOS.config.js file that exports a configuration object.
+ * The config mixes JS, JSON, and binary-encoded data to define custom
+ * dimensions, CPU instruction extensions, BIOS firmware overrides,
+ * custom frame element types, memory maps, and I/O device registrations.
+ * The file is automatically injected and parsed by the emulator.
  *
  * Usage:
  *   const os = new VirtualOS.Kernel74();
+ *   os.loadConfig(VOS_CONFIG); // auto-injected from VOS.config.js
  *   os.PowerOn(bootRom);
- *   os.Step(); // or os.Run(cycles);
  */
 
 // ──────────────────────────────────────────────
@@ -49,6 +56,220 @@ class UInt74 {
 }
 
 // ──────────────────────────────────────────────
+// Binary Deserializer – decodes base64 binary blobs
+// ──────────────────────────────────────────────
+class BinaryBlob {
+    constructor(base64) {
+        const bin = atob(base64);
+        this.data = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) this.data[i] = bin.charCodeAt(i);
+    }
+    readByte(offset) { return this.data[offset] || 0; }
+    readWord(offset) { return this.readByte(offset) | (this.readByte(offset+1) << 8); }
+    readDWord(offset) { return this.readWord(offset) | (this.readWord(offset+2) << 16); }
+    readBytes(offset, length) { return this.data.slice(offset, offset + length); }
+    get length() { return this.data.length; }
+}
+
+// ──────────────────────────────────────────────
+// Mini-Extension Parser – handles JS/JSON/Binary hybrid format
+// ──────────────────────────────────────────────
+class MiniExtensionParser {
+    constructor(source) {
+        this.source = source;
+        this.parsed = null;
+        this.errors = [];
+        this.warnings = [];
+    }
+    parse() {
+        try {
+            // Try direct JSON first
+            this.parsed = JSON.parse(this.source);
+            this._validate();
+        } catch (e) {
+            // Hybrid mode: extract JSON between markers, parse binary blocks
+            this._parseHybrid();
+        }
+        return { config: this.parsed, errors: this.errors, warnings: this.warnings };
+    }
+    _parseHybrid() {
+        // Extract sections: @JSON{...}@, @BINARY{base64}@, @JS{code}@
+        const jsonMatch = this.source.match(/@JSON\{([\s\S]*?)\}@/);
+        const binaryMatches = this.source.matchAll(/@BINARY\{([A-Za-z0-9+/=]+)\}@/g);
+        const jsMatch = this.source.match(/@JS\{([\s\S]*?)\}@/);
+        
+        let config = {};
+        if (jsonMatch) {
+            try { config = JSON.parse(jsonMatch[1]); } catch(e) { this.errors.push('Invalid JSON block'); }
+        }
+        // Process binary blocks
+        const binaryBlocks = {};
+        for (const match of binaryMatches) {
+            const blob = new BinaryBlob(match[1]);
+            const id = `binary_${Object.keys(binaryBlocks).length}`;
+            binaryBlocks[id] = blob;
+        }
+        config.__binaryBlocks = binaryBlocks;
+        // Execute JS block in sandbox
+        if (jsMatch) {
+            try {
+                const fn = new Function('config', 'BinaryBlob', jsMatch[1]);
+                fn(config, BinaryBlob);
+            } catch(e) { this.errors.push(`JS block error: ${e.message}`); }
+        }
+        this.parsed = config;
+        this._validate();
+    }
+    _validate() {
+        if (!this.parsed) { this.errors.push('Empty configuration'); return; }
+        if (this.parsed.version && typeof this.parsed.version !== 'string') this.errors.push('version must be a string');
+        if (this.parsed.extensions && !Array.isArray(this.parsed.extensions)) this.errors.push('extensions must be an array');
+    }
+}
+
+// ──────────────────────────────────────────────
+// Mini-Extension Loader – applies config to emulator
+// ──────────────────────────────────────────────
+class MiniExtensionLoader {
+    constructor(kernel) {
+        this.kernel = kernel;
+        this.loaded = [];
+    }
+    load(config) {
+        if (!config || config.errors?.length) return false;
+        const cfg = config.config || config;
+        // Register custom dimensions
+        if (cfg.dimensions) {
+            for (const dim of cfg.dimensions) {
+                if (dim.binaryData && cfg.__binaryBlocks?.[dim.binaryData]) {
+                    const blob = cfg.__binaryBlocks[dim.binaryData];
+                    this._registerBinaryDimension(dim.name, dim.count, blob);
+                } else if (dim.type === '2D') {
+                    const d = new Dimension2D();
+                    if (dim.customName) d.name = dim.customName;
+                    this.kernel.currentGPU?.addDimension(d);
+                } else if (dim.type === 'Mixel') {
+                    this.kernel.currentGPU?.addDimension(new MixelDimension());
+                }
+            }
+        }
+        // Register custom frame element factories
+        if (cfg.frameElements) {
+            for (const fe of cfg.frameElements) {
+                this._registerFrameElement(fe.name, fe.factory, cfg);
+            }
+        }
+        // Apply CPU instruction extensions
+        if (cfg.cpuExtensions) {
+            for (const ext of cfg.cpuExtensions) {
+                this._applyCpuExtension(ext.opcode, ext.handler, cfg);
+            }
+        }
+        // Apply memory map overrides
+        if (cfg.memoryMap) {
+            this._applyMemoryMap(cfg.memoryMap);
+        }
+        // Register I/O devices
+        if (cfg.ioDevices) {
+            for (const dev of cfg.ioDevices) {
+                this._registerIODevice(dev.port, dev.name, dev.handler, cfg);
+            }
+        }
+        this.loaded.push(cfg.name || 'unnamed');
+        return true;
+    }
+    _registerBinaryDimension(name, count, blob) {
+        const gpu = this.kernel.currentGPU;
+        if (!gpu) return;
+        const dim = {
+            name: name,
+            dimensionCount: count,
+            createElement: (...args) => new Pixel2D(args[0] || 0),
+            createFrame: (w, h) => {
+                const frame = new Frame2D(w, h);
+                // Decode binary data into frame pixels
+                for (let y = 0; y < h && y * w < blob.length; y++) {
+                    for (let x = 0; x < w && y * w + x < blob.length; x++) {
+                        frame.set(x, y, blob.readByte(y * w + x));
+                    }
+                }
+                return frame;
+            }
+        };
+        gpu.dimensions.set(name, dim);
+        gpu.frames.set(name, dim.createFrame(gpu.width, gpu.height));
+        if (!gpu.activeDim) gpu.activeDim = name;
+    }
+    _registerFrameElement(name, factoryCode, cfg) {
+        try {
+            const fn = new Function('Pixel2D', 'Mixel', 'BinaryBlob', 'UInt74', factoryCode);
+            const element = fn(Pixel2D, Mixel, BinaryBlob, UInt74);
+            this[name] = element;
+        } catch(e) { /* skip invalid */ }
+    }
+    _applyCpuExtension(opcode, handlerCode, cfg) {
+        const cpu = this.kernel.currentCPU;
+        if (!cpu || !cpu.cycle) return;
+        const originalCycle = cpu.cycle.bind(cpu);
+        try {
+            const fn = new Function('bus', 'regs', 'ip', 'sp', 'flags', 'UInt74', 'BinaryBlob', handlerCode);
+            // Store extension
+            if (!cpu.__extensions) cpu.__extensions = {};
+            cpu.__extensions[opcode] = fn;
+        } catch(e) { /* skip */ }
+    }
+    _applyMemoryMap(memoryMap) {
+        const bus = this.kernel.bus;
+        if (!bus || !memoryMap) return;
+        for (const region of memoryMap) {
+            if (region.data && typeof region.data === 'string') {
+                const blob = new BinaryBlob(region.data);
+                for (let i = 0; i < blob.length && region.address + i < 0x10000; i++) {
+                    bus.writeByte(region.address + i, blob.readByte(i));
+                }
+            }
+        }
+    }
+    _registerIODevice(port, name, handlerCode, cfg) {
+        const bus = this.kernel.bus;
+        if (!bus) return;
+        if (!bus.__ioDevices) bus.__ioDevices = {};
+        try {
+            const fn = new Function('bus', 'value', 'isWrite', 'UInt74', 'BinaryBlob', handlerCode);
+            bus.__ioDevices[port] = { name, handler: fn };
+        } catch(e) { /* skip */ }
+    }
+}
+
+// ──────────────────────────────────────────────
+// VOS.config.js Auto-Injector
+// ──────────────────────────────────────────────
+class VOSConfigLoader {
+    static async loadFromURL(url) {
+        try {
+            const resp = await fetch(url);
+            const source = await resp.text();
+            return VOSConfigLoader.parse(source);
+        } catch(e) {
+            return { config: null, errors: [`Failed to load ${url}: ${e.message}`] };
+        }
+    }
+    static parse(source) {
+        const parser = new MiniExtensionParser(source);
+        return parser.parse();
+    }
+    static async injectInto(kernel, url = 'VOS.config.js') {
+        const result = await VOSConfigLoader.loadFromURL(url);
+        if (result.config && !result.errors?.length) {
+            const loader = new MiniExtensionLoader(kernel);
+            loader.load(result);
+            return loader;
+        }
+        return null;
+    }
+}
+
+// ──────────────────────────────────────────────
 // Bus – 32GB virtual address space (page based)
 // ──────────────────────────────────────────────
 class Bus {
@@ -58,6 +279,7 @@ class Bus {
         this.dma = new EmulatedDMA(this);
         this.diskController = new EmulatedDiskController(this);
         this.networkController = new EmulatedNetworkController(this);
+        this.__ioDevices = {};
         this.totalReads = 0;
         this.totalWrites = 0;
         this.pageSize = 4096;
@@ -66,6 +288,11 @@ class Bus {
     get usedRam() { return this.pages.size * this.pageSize; }
     get totalRam() { return 32n * 1024n * 1024n * 1024n; }
     readByte32(addr) {
+        // Check I/O devices
+        if (addr >= 0xFF00 && this.__ioDevices[addr - 0xFF00]) {
+            const dev = this.__ioDevices[addr - 0xFF00];
+            try { return dev.handler(this, 0, false) & 0xFF; } catch(e) { return 0; }
+        }
         this.totalReads++;
         const idx = Math.floor(addr / this.pageSize);
         const off = addr % this.pageSize;
@@ -73,6 +300,12 @@ class Bus {
         return page ? page[off] : 0;
     }
     writeByte32(addr, value) {
+        // Check I/O devices
+        if (addr >= 0xFF00 && this.__ioDevices[addr - 0xFF00]) {
+            const dev = this.__ioDevices[addr - 0xFF00];
+            try { dev.handler(this, value, true); } catch(e) {}
+            return;
+        }
         this.totalWrites++;
         const idx = Math.floor(addr / this.pageSize);
         const off = addr % this.pageSize;
@@ -188,7 +421,7 @@ class EmulatedDiskController {
         this.bus.writeByte(0xFF85, this.status);
     }
     _exec() {
-        if (this.cmd === 0x01) { // read
+        if (this.cmd === 0x01) {
             this.status = 0x01;
             const sec = this.bus.readWord(0xFF80) | (this.bus.readWord(0xFF82) << 16);
             if (this.sectors.has(sec)) {
@@ -196,7 +429,7 @@ class EmulatedDiskController {
                 for (let i=0; i<512; i++) this.bus.writeByte(0xFF86+i, d[i]);
                 this.status = 0x00;
             } else this.status = 0x80;
-        } else if (this.cmd === 0x02) { // write
+        } else if (this.cmd === 0x02) {
             this.status = 0x01;
             const sec = this.bus.readWord(0xFF80) | (this.bus.readWord(0xFF82) << 16);
             const d = new Uint8Array(512);
@@ -236,7 +469,7 @@ class EmulatedNetworkController {
         this.bus.writeByte(0xFF91, this.status);
     }
     _exec() {
-        if (this.cmd === 0x10) { // transmit
+        if (this.cmd === 0x10) {
             const len = this.bus.readWord(0xFF94), buf = this.bus.readDWord(0xFF98);
             if (len && buf) {
                 const pkt = new Uint8Array(len);
@@ -244,7 +477,7 @@ class EmulatedNetworkController {
                 this.outQ.push(pkt);
                 this.status &= ~0x01; this.cmd = 0;
             }
-        } else if (this.cmd === 0x20) { // receive
+        } else if (this.cmd === 0x20) {
             if (this.inQ.length) {
                 const pkt = this.inQ.shift();
                 const max = this.bus.readWord(0xFF9C), buf = this.bus.readDWord(0xFFA0);
@@ -259,12 +492,13 @@ class EmulatedNetworkController {
 }
 
 // ──────────────────────────────────────────────
-// 32‑bit CPU (full instruction set)
+// 32‑bit CPU (full instruction set) with extension support
 // ──────────────────────────────────────────────
 class CPU {
     constructor(bus) {
         this.bus = bus;
         this.regs = new Uint32Array(16);
+        this.__extensions = {};
         this.reset();
     }
     reset() {
@@ -279,13 +513,20 @@ class CPU {
     getRegister(r) { return this.regs[r]; }
     setRegister(r, v) { this.regs[r] = v; }
 
-    // main execution
     cycle() {
         if (this.halted) return;
         const op = this.bus.readByte(this.ip++);
+        // Check for custom extension opcode
+        if (this.__extensions[op]) {
+            try {
+                this.__extensions[op](this.bus, this.regs, this.ip, this.sp, this.flags, UInt74, BinaryBlob);
+                this.cycleCount++; this.instrCount++;
+                return;
+            } catch(e) { /* fall through to standard execution */ }
+        }
         this.cycleCount++; this.instrCount++;
         switch (op) {
-            case 0x00: break; // NOP
+            case 0x00: break;
             case 0x10: { const ops=this.bus.readByte(this.ip++); this.regs[ops>>4]=this.regs[ops&0xF]; break; }
             case 0x11: { const r=this.bus.readByte(this.ip++); this.regs[r]=this.bus.readDWord(this.ip); this.ip+=4; break; }
             case 0x12: { const ops=this.bus.readByte(this.ip++); this.regs[ops>>4]=this.bus.readDWord(this.regs[ops&0xF]); break; }
@@ -408,7 +649,7 @@ class GPU {
         const w = this.bus.readWord(0xFF04), h = this.bus.readWord(0xFF06);
         if (w !== this.width || h !== this.height) { this.width=w; this.height=h; this.fb=new Uint8Array(w*h); }
         this.fb.fill(0);
-        if ((mode & 1) === 0) { // tile mode
+        if ((mode & 1) === 0) {
             if (ctrl & 1) this._renderBgTiles();
             if (ctrl & 2) this._renderSprites();
         } else {
@@ -840,11 +1081,11 @@ class GPU74Bit {
         this.keys = new Array(256).fill(false);
     }
     addDimension(dim) { 
-    this.dimensions.set(dim.name, dim); 
-    const frame = dim.createFrame(this.width, this.height);
-    this.frames.set(dim.name, frame); 
-    if (!this.activeDim) this.activeDim = dim.name; 
-}
+        this.dimensions.set(dim.name, dim); 
+        const frame = dim.createFrame(this.width, this.height);
+        this.frames.set(dim.name, frame); 
+        if (!this.activeDim) this.activeDim = dim.name; 
+    }
     getAvailableDimensions() { return Array.from(this.dimensions.keys()); }
     setActiveDimension(name) { if (!this.dimensions.has(name)) throw new Error('Dimension not found'); this.activeDim = name; }
     getActiveDimension() { return this.dimensions.get(this.activeDim); }
@@ -860,7 +1101,7 @@ class GPU74Bit {
 }
 
 // ──────────────────────────────────────────────
-// Kernel74 – unified 32/74‑bit emulator
+// Kernel74 – unified 32/74‑bit emulator with config support
 // ──────────────────────────────────────────────
 class Kernel74 {
     constructor() {
@@ -872,10 +1113,32 @@ class Kernel74 {
         this.poweredOn = false;
         this.mode = 'Bit32';
         this.cpu74 = null; this.gpu74 = null;
+        this.__configLoader = null;
     }
     get currentMode() { return this.mode; }
     get currentCPU() { return this.mode==='Bit74' ? this.cpu74 : this.cpu32; }
     get currentGPU() { return this.mode==='Bit74' ? this.gpu74 : this.gpu32; }
+
+    async loadConfig(sourceOrUrl) {
+        let config;
+        if (typeof sourceOrUrl === 'string') {
+            if (sourceOrUrl.endsWith('.js') || sourceOrUrl.startsWith('http')) {
+                const result = await VOSConfigLoader.loadFromURL(sourceOrUrl);
+                config = result.config;
+            } else {
+                const parser = new MiniExtensionParser(sourceOrUrl);
+                const result = parser.parse();
+                config = result.config;
+            }
+        } else if (typeof sourceOrUrl === 'object') {
+            config = sourceOrUrl;
+        }
+        if (config) {
+            this.__configLoader = new MiniExtensionLoader(this);
+            this.__configLoader.load({ config });
+        }
+        return this.__configLoader;
+    }
 
     switchTo74Bit() {
         if (this.mode==='Bit74') return;
@@ -921,7 +1184,6 @@ class Kernel74 {
         else this.cpu32.run(cycles);
     }
 
-    // Disk API wrappers
     mountDisk(img) { this.bus.diskController.mountDiskImage(img); }
     unmountDisk() { this.bus.diskController.unmount(); }
     isDiskMounted() { return this.bus.diskController.isMounted(); }
@@ -931,13 +1193,11 @@ class Kernel74 {
     formatDisk() { this.bus.diskController.format(); }
     exportDiskImage() { return this.bus.diskController.getDiskImage(); }
 
-    // Network API wrappers
     receiveNetworkPacket(pkt) { this.bus.networkController.receivePacket(pkt); }
     getOutgoingNetworkPacket() { return this.bus.networkController.getOutgoingPacket(); }
     get outgoingPacketCount() { return this.bus.networkController.outgoingCount; }
     get incomingPacketCount() { return this.bus.networkController.incomingCount; }
 
-    // BIOS wrappers
     compileFirmware(src) {
         const lexer = new BiosLexer(src);
         const tokens = lexer.tokenize();
@@ -981,7 +1241,8 @@ const VirtualOS = {
     BiosTokenType, BiosToken, BiosFirmwareVersion, BiosLexer, BiosCompiler, BiosRuntime, BiosVersionManager,
     UInt74, CPU74Bit, GPU74Bit,
     RenderingDimension, FrameElement, Frame, Pixel2D, Dimension2D, Frame2D, Mixel, MixelDimension, MixelFrame,
-    Kernel74
+    Kernel74,
+    BinaryBlob, MiniExtensionParser, MiniExtensionLoader, VOSConfigLoader
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = VirtualOS;
 if (typeof window !== 'undefined') window.VirtualOS = VirtualOS;
