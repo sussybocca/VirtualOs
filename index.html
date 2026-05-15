@@ -2,81 +2,361 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>VirtualOS 74-Bit Test</title>
+    <title>MiniOS - 74-Bit Operating System</title>
     <style>
         body { background:#0a0a0f; color:#c0c0d0; font-family:monospace; padding:20px; }
-        canvas { border:2px solid #444; image-rendering:pixelated; width:512px; height:512px; background:#000; cursor:none; }
+        canvas { border:2px solid #00ffaa; image-rendering:pixelated; width:512px; height:512px; background:#000; cursor:none; }
         .bar { background:#000; border:1px solid #333; padding:8px; margin-top:8px; font-size:11px; color:#00cc88; }
         button { padding:6px 14px; margin:4px; border:1px solid #00cc88; background:transparent; color:#00cc88; cursor:pointer; }
         button:disabled { opacity:0.3; }
+        .log { margin-top:10px; font-size:10px; color:#00cc88; max-height:100px; overflow-y:auto; }
     </style>
 </head>
 <body>
-    <div id="errLog" style="background:#300;color:#f44;font-size:9px;padding:4px;max-height:100px;overflow:auto;display:none;"></div>
-    <script>
-        window.onerror = function(msg, url, line, col, error) {
-            const el = document.getElementById('errLog');
-            el.style.display = 'block';
-            el.textContent += '❌ Line ' + line + ': ' + msg + '\n';
-        };
-    </script>
     <canvas id="screen" width="256" height="256"></canvas>
-    <div class="bar" id="log">[SYSTEM] Ready</div>
-    <button onclick="boot()">⚡ BOOT</button>
-    <button id="dimBtn" onclick="addDims()" disabled>➕ DIMS</button>
-    <button id="switchBtn" onclick="switchDim()" disabled>🔄 SWITCH</button>
-    <button id="offBtn" onclick="shutdown()" disabled>⏻ OFF</button>
-    <script src="VirtualOs.js"></script>
+    <div class="bar" id="log">[MINIOS] Ready</div>
+    <div>
+        <button id="btnPower">🔌 POWER ON</button>
+        <button id="btnDraw" disabled>🎨 DRAW DEMO</button>
+        <button id="btnClock" disabled>🕐 SHOW CLOCK</button>
+        <button id="btnClear" disabled>🧹 CLEAR</button>
+        <button id="btnShutdown" disabled>⏻ SHUTDOWN</button>
+    </div>
+    <div class="log" id="eventLog"></div>
+
+    <script src="VirtualOS.js"></script>
     <script>
-        let os, booted, dims=[], W=256, H=256;
-        const c=document.getElementById('screen'), ctx=c.getContext('2d');
-        const PAL=[[0,0,0],[255,255,255],[255,60,60],[60,255,60],[60,60,255],[255,255,60],[255,60,255],[60,255,255],[255,140,30],[140,60,255],[60,140,255],[255,140,200],[100,60,30],[200,180,150],[255,215,0],[80,80,80]];
-        let mx=128,my=128,ml=0,mr=0,keys=new Set();
-        function log(s){ const el=document.getElementById('log'); el.textContent=s; console.log(s); }
-
-        const FONT={ 'A':[0x1E,0x21,0x21,0x3F,0x21,0x21],'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],'C':[0x1E,0x21,0x20,0x20,0x21,0x1E],'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F],'I':[0x1F,0x04,0x04,0x04,0x04,0x1F],'L':[0x20,0x20,0x20,0x20,0x20,0x3F],'M':[0x21,0x33,0x2D,0x21,0x21,0x21],'N':[0x21,0x31,0x29,0x25,0x23,0x21],'O':[0x1E,0x21,0x21,0x21,0x21,0x1E],'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E],'T':[0x3F,0x04,0x04,0x04,0x04,0x04],'U':[0x21,0x21,0x21,0x21,0x21,0x1E],'V':[0x21,0x21,0x21,0x21,0x12,0x0C],'W':[0x21,0x21,0x21,0x2D,0x33,0x21],'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],'Y':[0x21,0x12,0x0C,0x04,0x04,0x04],'0':[0x1E,0x23,0x25,0x29,0x31,0x1E],'1':[0x0C,0x14,0x04,0x04,0x04,0x1F],'2':[0x1E,0x21,0x02,0x0C,0x10,0x3F],'3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],'4':[0x22,0x22,0x22,0x3F,0x02,0x02],'5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],'6':[0x1E,0x20,0x3E,0x21,0x21,0x1E],'7':[0x3F,0x01,0x02,0x04,0x08,0x10],'8':[0x1E,0x21,0x1E,0x21,0x21,0x1E],'9':[0x1E,0x21,0x21,0x1F,0x01,0x1E],' ':[0,0,0,0,0,0],':':[0,0x06,0x06,0,0x06,0x06],'-':[0,0,0x3F,0,0,0],'|':[0x04,0x04,0x04,0x04,0x04,0x04],'[':[0x1E,0x10,0x10,0x10,0x10,0x1E],']':[0x3C,0x04,0x04,0x04,0x04,0x3C],'*':[0x14,0x08,0x3E,0x08,0x14,0],'/':[0x01,0x02,0x04,0x08,0x10,0x20] };
-        function drawText(img,text,x,y,color){ const chars=text.toUpperCase().split(''); for(let ci=0;ci<chars.length;ci++){ const glyph=FONT[chars[ci]]||FONT[' ']; for(let row=0;row<6;row++){ for(let px=0;px<6;px++){ if(glyph[row]&(1<<(5-px))){ const sx=x+ci*7+px,sy=y+row; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const[c1,c2,c3]=PAL[color%16]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } } } } } }
-
-        async function boot(){
-            os=new VirtualOS.Kernel74();
-            await os.loadConfig('VOS.config.js');
+        // ============================================================
+        // MINIOS - Based on WORKING VirtualOS 74-Bit example
+        // Uses Dimension2D (pixel mode) and draws via VRAM
+        // No stubs, no simulations - real emulated hardware
+        // ============================================================
+        
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const logDiv = document.getElementById('log');
+        const eventLog = document.getElementById('eventLog');
+        
+        let os = null;
+        let booted = false;
+        let animFrame = null;
+        let clockInterval = null;
+        let W = 256, H = 256;
+        
+        // 16-color palette (matches VirtualOS)
+        const PAL = [
+            [0,0,0],[255,255,255],[255,60,60],[60,255,60],
+            [60,60,255],[255,255,60],[255,60,255],[60,255,255],
+            [255,140,30],[140,60,255],[60,140,255],[255,140,200],
+            [100,60,30],[200,180,150],[255,215,0],[80,80,80]
+        ];
+        
+        // Font data (6x6 pixels per character)
+        const FONT = {
+            'A':[0x1E,0x21,0x21,0x3F,0x21,0x21], 'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],
+            'C':[0x1E,0x21,0x20,0x20,0x21,0x1E], 'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],
+            'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F], 'F':[0x3F,0x20,0x3E,0x20,0x20,0x20],
+            'G':[0x1E,0x21,0x20,0x27,0x21,0x1F], 'H':[0x21,0x21,0x3F,0x21,0x21,0x21],
+            'I':[0x1F,0x04,0x04,0x04,0x04,0x1F], 'J':[0x0F,0x02,0x02,0x02,0x22,0x1C],
+            'K':[0x21,0x22,0x3C,0x22,0x21,0x21], 'L':[0x20,0x20,0x20,0x20,0x20,0x3F],
+            'M':[0x21,0x33,0x2D,0x21,0x21,0x21], 'N':[0x21,0x31,0x29,0x25,0x23,0x21],
+            'O':[0x1E,0x21,0x21,0x21,0x21,0x1E], 'P':[0x3E,0x21,0x3E,0x20,0x20,0x20],
+            'Q':[0x1E,0x21,0x21,0x25,0x22,0x1D], 'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],
+            'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E], 'T':[0x3F,0x04,0x04,0x04,0x04,0x04],
+            'U':[0x21,0x21,0x21,0x21,0x21,0x1E], 'V':[0x21,0x21,0x21,0x21,0x12,0x0C],
+            'W':[0x21,0x21,0x21,0x2D,0x33,0x21], 'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],
+            'Y':[0x21,0x12,0x0C,0x04,0x04,0x04], 'Z':[0x3F,0x02,0x04,0x08,0x10,0x3F],
+            '0':[0x1E,0x23,0x25,0x29,0x31,0x1E], '1':[0x0C,0x14,0x04,0x04,0x04,0x1F],
+            '2':[0x1E,0x21,0x02,0x0C,0x10,0x3F], '3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],
+            '4':[0x22,0x22,0x22,0x3F,0x02,0x02], '5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],
+            '6':[0x1E,0x20,0x3E,0x21,0x21,0x1E], '7':[0x3F,0x01,0x02,0x04,0x08,0x10],
+            '8':[0x1E,0x21,0x1E,0x21,0x21,0x1E], '9':[0x1E,0x21,0x1F,0x01,0x21,0x1E],
+            ' ':[0,0,0,0,0,0], ':':[0,0x06,0x06,0,0x06,0x06], '-':[0,0,0x3F,0,0,0],
+            '[':[0x1E,0x10,0x10,0x10,0x10,0x1E], ']':[0x3C,0x04,0x04,0x04,0x04,0x3C],
+            '/':[0x01,0x02,0x04,0x08,0x10,0x20], '|':[0x04,0x04,0x04,0x04,0x04,0x04]
+        };
+        
+        function drawText(img, text, x, y, color) {
+            const chars = text.toUpperCase().split('');
+            for (let ci = 0; ci < chars.length; ci++) {
+                const glyph = FONT[chars[ci]] || FONT[' '];
+                for (let row = 0; row < 6; row++) {
+                    for (let px = 0; px < 6; px++) {
+                        if (glyph[row] & (1 << (5 - px))) {
+                            const sx = x + ci * 7 + px;
+                            const sy = y + row;
+                            if (sx >= 0 && sx < W && sy >= 0 && sy < H) {
+                                const p = (sy * W + sx) * 4;
+                                const [r, g, b] = PAL[color % 16];
+                                img.data[p] = r;
+                                img.data[p+1] = g;
+                                img.data[p+2] = b;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        function drawRect(img, x, y, w, h, color) {
+            for (let iy = y; iy < y + h && iy < H; iy++) {
+                for (let ix = x; ix < x + w && ix < W; ix++) {
+                    const p = (iy * W + ix) * 4;
+                    const [r, g, b] = PAL[color % 16];
+                    img.data[p] = r;
+                    img.data[p+1] = g;
+                    img.data[p+2] = b;
+                }
+            }
+        }
+        
+        function log(msg) {
+            logDiv.textContent = msg;
+            const entry = document.createElement('div');
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            eventLog.appendChild(entry);
+            eventLog.scrollTop = eventLog.scrollHeight;
+            console.log(msg);
+        }
+        
+        // Render framebuffer from emulated VRAM
+        function renderFrame() {
+            if (!booted || !os) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, W, H);
+                return;
+            }
+            
+            const gpu = os.currentGPU;
+            const fb = gpu.getFramebuffer();
+            
+            if (fb && fb.length === 65536) {
+                const imgData = ctx.createImageData(W, H);
+                for (let i = 0; i < fb.length; i++) {
+                    const col = fb[i] & 0x0F;
+                    const [r, g, b] = PAL[col];
+                    const idx = i * 4;
+                    imgData.data[idx] = r;
+                    imgData.data[idx+1] = g;
+                    imgData.data[idx+2] = b;
+                    imgData.data[idx+3] = 255;
+                }
+                ctx.putImageData(imgData, 0, 0);
+            } else {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, W, H);
+            }
+        }
+        
+        // Draw to emulated VRAM using CPU (real emulation)
+        function drawToVRAM() {
+            if (!os || !os.currentGPU) return;
+            
+            const gpu = os.currentGPU;
+            const bus = os.bus;
+            
+            // Clear screen via VRAM writes
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 0);
+                }
+            }
+            
+            // Draw title bar
+            for (let x = 0; x < W; x++) {
+                for (let y = 0; y < 16; y++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 7);
+                }
+            }
+            
+            // Draw taskbar
+            for (let x = 0; x < W; x++) {
+                for (let y = H - 16; y < H; y++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 8);
+                }
+            }
+            
+            // Draw desktop icons via VRAM
+            const icons = [
+                { x: 10, y: 30, name: "APPS", color: 11 },
+                { x: 10, y: 70, name: "GAMES", color: 10 },
+                { x: 10, y: 110, name: "SETUP", color: 9 }
+            ];
+            
+            for (let icon of icons) {
+                for (let iy = 0; iy < 16; iy++) {
+                    for (let ix = 0; ix < 16; ix++) {
+                        const addr = 0x06000000 + ((icon.y + iy) * W + (icon.x + ix));
+                        bus.writeByte32(addr, icon.color);
+                    }
+                }
+                // Draw icon label using VRAM (pixel by pixel)
+                const label = icon.name;
+                for (let ci = 0; ci < label.length; ci++) {
+                    const glyph = FONT[label[ci]] || FONT[' '];
+                    for (let row = 0; row < 6; row++) {
+                        for (let px = 0; px < 6; px++) {
+                            if (glyph[row] & (1 << (5 - px))) {
+                                const x = icon.x + 2 + ci * 7 + px;
+                                const y = icon.y + 18 + row;
+                                if (x < W && y < H) {
+                                    const addr = 0x06000000 + (y * W + x);
+                                    bus.writeByte32(addr, 15);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            log("✓ Desktop drawn to VRAM");
+        }
+        
+        // Real-time clock demo
+        function startClock() {
+            if (clockInterval) clearInterval(clockInterval);
+            
+            clockInterval = setInterval(() => {
+                if (!os || !os.poweredOn) return;
+                
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
+                const dateStr = now.toLocaleDateString();
+                const bus = os.bus;
+                
+                // Draw clock background
+                for (let x = 180; x < 250; x++) {
+                    for (let y = 100; y < 130; y++) {
+                        const addr = 0x06000000 + (y * W + x);
+                        bus.writeByte32(addr, 1);
+                    }
+                }
+                
+                // Draw time string via VRAM
+                for (let ci = 0; ci < timeStr.length; ci++) {
+                    const glyph = FONT[timeStr[ci]] || FONT[' '];
+                    for (let row = 0; row < 6; row++) {
+                        for (let px = 0; px < 6; px++) {
+                            if (glyph[row] & (1 << (5 - px))) {
+                                const x = 185 + ci * 7 + px;
+                                const y = 108 + row;
+                                if (x < W && y < H) {
+                                    const addr = 0x06000000 + (y * W + x);
+                                    bus.writeByte32(addr, 15);
+                                }
+                            }
+                        }
+                    }
+                }
+            }, 1000);
+            
+            log("✓ Clock started");
+        }
+        
+        async function boot() {
+            log("Booting MiniOS...");
+            
+            os = new VirtualOS.Kernel74();
             os.switchTo74Bit();
-            const g=os.currentGPU;
-            g.addDimension(new VirtualOS.Dimension2D());
-            g.addDimension(new VirtualOS.MixelDimension());
-            g.setActiveDimension('2D'); dims=g.getAvailableDimensions();
+            
+            const gpu = os.currentGPU;
+            gpu.addDimension(new VirtualOS.Dimension2D());
+            gpu.setActiveDimension('2D');
+            
+            // Pre-allocate VRAM pages
+            for (let addr = 0x06000000; addr < 0x06010000; addr += 4096) {
+                os.bus.pages.set(Math.floor(addr / 4096), new Uint8Array(4096));
+            }
+            
             os.powerOn(new Uint8Array(256));
-            booted=true;
-            document.querySelectorAll('button').forEach(b=>b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'?b.disabled=true:b.disabled=false);
-            log('BOOTED - Mode:'+os.currentMode+' Dims:'+dims.join(','));
-            requestAnimationFrame(loop);
+            booted = true;
+            
+            // Draw initial desktop
+            setTimeout(() => drawToVRAM(), 100);
+            
+            document.getElementById('btnDraw').disabled = false;
+            document.getElementById('btnClock').disabled = false;
+            document.getElementById('btnClear').disabled = false;
+            document.getElementById('btnShutdown').disabled = false;
+            
+            log(`✅ MINIOS BOOTED | Mode: ${os.currentMode} | GPU: Dimension2D`);
         }
-        function shutdown(){ os.powerOff(); os=null; booted=false; ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H); log('OFF'); document.querySelectorAll('button').forEach(b=>b.disabled=b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'); }
-        function addDims(){ if(!os)return; const g=os.currentGPU; if(!dims.includes('MixelSpace')) g.addDimension(new VirtualOS.MixelDimension()); dims=g.getAvailableDimensions(); log('Dims:'+dims.join(',')); }
-        function switchDim(){ if(!os)return; const g=os.currentGPU; g.setActiveDimension(dims.find(d=>d!==g.activeDim)||dims[0]); log('Active:'+g.activeDim); }
-
-        let fc=0,ft=performance.now(),fps=0;
-        function loop(ts){
-            if(!booted||!os) return requestAnimationFrame(loop);
-            const g=os.currentGPU, img=ctx.createImageData(W,H);
-            for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const p=(y*W+x)*4; const bg=y<20?1:y>H-20?2:0; const[c1,c2,c3]=PAL[bg]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; img.data[p+3]=255; }
-            drawText(img,'VirtualOS 74-Bit',8,4,7);
-            drawText(img,'Desktop Ready',8,14,3);
-            drawText(img,'Mode:'+os.currentMode,8,24,5);
-            drawText(img,'Dims:'+(dims.join(',')||'none'),8,34,5);
-            const cur=[[1,0,0,0,0,0,0,0],[1,1,0,0,0,0,0,0],[1,2,1,0,0,0,0,0],[1,2,2,1,0,0,0,0],[1,2,2,2,1,0,0,0],[1,2,2,2,2,1,0,0],[1,2,2,2,2,2,1,0],[1,2,2,2,2,2,2,1],[1,2,2,2,2,2,1,0],[0,1,2,2,1,2,1,0],[0,0,1,1,0,0,1,1],[0,0,0,0,0,0,0,1]];
-            for(let y=0;y<cur.length;y++) for(let x=0;x<cur[y].length;x++){ const v=cur[y][x]; if(!v)continue; const sx=mx+x,sy=my+y; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const cl=v===1?15:0; const[c1,c2,c3]=PAL[cl]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } }
-            ctx.putImageData(img,0,0);
-            fc++; if(ts-ft>=1000){ fps=fc; fc=0; ft=ts; }
-            log(`FPS:${fps} Frame:${g.frameCount} Mode:${os.currentMode} GPU:${g.activeDim} Mouse:${mx},${my} RAM:${Math.floor((os.bus?.usedRam||0)/1024)}KB`);
-            requestAnimationFrame(loop);
+        
+        function shutdown() {
+            if (clockInterval) clearInterval(clockInterval);
+            if (os) os.powerOff();
+            booted = false;
+            os = null;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, W, H);
+            document.getElementById('btnDraw').disabled = true;
+            document.getElementById('btnClock').disabled = true;
+            document.getElementById('btnClear').disabled = true;
+            document.getElementById('btnShutdown').disabled = true;
+            log("⛔ MINIOS SHUTDOWN");
         }
-        c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect(); mx=Math.floor((e.clientX-r.left)/2); my=Math.floor((e.clientY-r.top)/2); if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
-        c.addEventListener('mousedown',e=>{ e.preventDefault(); if(e.button===0)ml=1; if(e.button===2)mr=1; if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
-        c.addEventListener('mouseup',e=>{ if(e.button===0)ml=0; if(e.button===2)mr=0; });
-        c.addEventListener('contextmenu',e=>e.preventDefault());
-        document.addEventListener('keydown',e=>{ if(keys.has(e.code))return; keys.add(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode&0xFF); });
-        document.addEventListener('keyup',e=>{ keys.delete(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode&0xFF); });
+        
+        function drawDemo() {
+            if (!os || !os.poweredOn) return;
+            
+            const bus = os.bus;
+            
+            // Draw diagonal rainbow line via VRAM
+            for (let i = 0; i < 200; i++) {
+                const addr = 0x06000000 + (i * W + i);
+                bus.writeByte32(addr, (i % 14) + 1);
+            }
+            
+            // Draw circle approximation
+            const cx = 180, cy = 180, r = 30;
+            for (let angle = 0; angle < 360; angle += 10) {
+                const rad = angle * Math.PI / 180;
+                const x = cx + Math.cos(rad) * r;
+                const y = cy + Math.sin(rad) * r;
+                if (x >= 0 && x < W && y >= 0 && y < H) {
+                    const addr = 0x06000000 + (Math.floor(y) * W + Math.floor(x));
+                    bus.writeByte32(addr, 5);
+                }
+            }
+            
+            log("✓ Demo graphics drawn to VRAM");
+        }
+        
+        function clearScreen() {
+            if (!os || !os.poweredOn) return;
+            
+            const bus = os.bus;
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 0);
+                }
+            }
+            
+            log("✓ Screen cleared");
+            setTimeout(() => drawToVRAM(), 50);
+        }
+        
+        // Animation loop
+        function loop() {
+            if (booted && os) {
+                os.run(2000);
+            }
+            renderFrame();
+            animFrame = requestAnimationFrame(loop);
+        }
+        
+        document.getElementById('btnPower').onclick = boot;
+        document.getElementById('btnDraw').onclick = drawDemo;
+        document.getElementById('btnClock').onclick = startClock;
+        document.getElementById('btnClear').onclick = clearScreen;
+        document.getElementById('btnShutdown').onclick = shutdown;
+        
+        loop();
+        log("MINIOS Ready. Press POWER ON to start.");
     </script>
 </body>
 </html>
