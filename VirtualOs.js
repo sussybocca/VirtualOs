@@ -129,48 +129,108 @@ class MiniExtensionLoader {
     constructor(kernel) {
         this.kernel = kernel;
         this.loaded = [];
+        this._deviceRegistry = new Map();
+        this._gpuInstructionSet = new Map();
+        this._hardwareLimits = null;
     }
+    
     load(config) {
         if (!config || config.errors?.length) return false;
         const cfg = config.config || config;
-        if (cfg.dimensions) {
-            for (const dim of cfg.dimensions) {
-                if (dim.binaryData && cfg.__binaryBlocks?.[dim.binaryData]) {
-                    const blob = cfg.__binaryBlocks[dim.binaryData];
-                    this._registerBinaryDimension(dim.name, dim.count, blob);
-                } else if (dim.type === '2D') {
-                    const d = new Dimension2D();
-                    if (dim.customName) d.name = dim.customName;
-                    this.kernel.currentGPU?.addDimension(d);
-                } else if (dim.type === 'Mixel') {
-                    this.kernel.currentGPU?.addDimension(new MixelDimension());
-                }
-            }
-        }
-        if (cfg.frameElements) {
-            for (const fe of cfg.frameElements) {
-                this._registerFrameElement(fe.name, fe.factory, cfg);
-            }
-        }
-        if (cfg.cpuExtensions) {
-            for (const ext of cfg.cpuExtensions) {
-                this._applyCpuExtension(ext.opcode, ext.handler, cfg);
-            }
-        }
-        if (cfg.memoryMap) {
-            this._applyMemoryMap(cfg.memoryMap);
-        }
-        if (cfg.ioDevices) {
-            for (const dev of cfg.ioDevices) {
-                this._registerIODevice(dev.port, dev.name, dev.handler, cfg);
-            }
-        }
-        if (cfg.console) {
-            this._registerConsole(cfg.console);
-        }
+        
+        // Apply hardware limits first
+        if (cfg.hardwareLimits) this._applyHardwareLimits(cfg.hardwareLimits);
+        if (cfg.system) this._applySystemConfig(cfg.system);
+        if (cfg.dimensions) this._applyDimensions(cfg, cfg.dimensions);
+        if (cfg.frameElements) this._applyFrameElements(cfg, cfg.frameElements);
+        if (cfg.cpuExtensions) this._applyCpuExtensions(cfg, cfg.cpuExtensions);
+        if (cfg.gpuInstructions) this._applyGpuInstructions(cfg, cfg.gpuInstructions);
+        if (cfg.memoryMap) this._applyMemoryMap(cfg.memoryMap);
+        if (cfg.ioDevices) this._applyIODevices(cfg, cfg.ioDevices);
+        if (cfg.emulatedDevices) this._applyEmulatedDevices(cfg, cfg.emulatedDevices);
+        if (cfg.console) this._registerConsole(cfg.console);
+        if (cfg.bios) this._applyBiosConfig(cfg.bios);
+        if (cfg.network) this._applyNetworkConfig(cfg.network);
+        if (cfg.storage) this._applyStorageConfig(cfg.storage);
+        if (cfg.audio) this._applyAudioConfig(cfg.audio);
+        
         this.loaded.push(cfg.name || 'unnamed');
         return true;
     }
+    
+    // ====================================================================
+    // HARDWARE LIMITS — Control maximum emulated hardware resources
+    // ====================================================================
+    _applyHardwareLimits(limits) {
+        this._hardwareLimits = limits;
+        const bus = this.kernel.bus;
+        const gpu = this.kernel.currentGPU;
+        const cpu = this.kernel.currentCPU;
+        
+        if (limits.maxMemoryPages && bus) {
+            bus.maxPages = Math.min(bus.maxPages, limits.maxMemoryPages);
+            // Trim existing pages if over limit
+            while (bus.pages.size > bus.maxPages) {
+                bus.pages.delete(bus.pages.keys().next().value);
+            }
+        }
+        if (limits.maxVRAMPages && gpu?.vramPages) {
+            gpu.maxVRAMPages = Math.min(gpu.maxVRAMPages || 50000, limits.maxVRAMPages);
+        }
+        if (limits.maxDisplayWidth && gpu) gpu.width = Math.min(gpu.width, limits.maxDisplayWidth);
+        if (limits.maxDisplayHeight && gpu) gpu.height = Math.min(gpu.height, limits.maxDisplayHeight);
+        if (limits.maxCPUCyclesPerFrame && cpu) {
+            cpu._maxCyclesPerFrame = limits.maxCPUCyclesPerFrame;
+        }
+        if (limits.maxDiskSectors && bus?.diskController) {
+            bus.diskController._maxSectors = limits.maxDiskSectors;
+        }
+        if (limits.maxNetworkPacketSize && bus?.networkController) {
+            bus.networkController._maxPacketSize = limits.maxNetworkPacketSize;
+        }
+    }
+    
+    // ====================================================================
+    // SYSTEM CONFIG — Global emulator settings
+    // ====================================================================
+    _applySystemConfig(sysConfig) {
+        const kernel = this.kernel;
+        if (sysConfig.defaultMode) {
+            if (sysConfig.defaultMode === 'Bit74') kernel.switchTo74Bit();
+            else kernel.switchTo32Bit();
+        }
+        if (sysConfig.bootAddress !== undefined && kernel.currentCPU) {
+            kernel.currentCPU.ip = sysConfig.bootAddress;
+        }
+        if (sysConfig.stackSize && kernel.currentCPU) {
+            kernel.currentCPU.sp = sysConfig.stackSize;
+        }
+        if (sysConfig.interruptsEnabled !== undefined && kernel.currentCPU) {
+            if (sysConfig.interruptsEnabled) kernel.currentCPU.flags |= 0x200;
+            else kernel.currentCPU.flags &= ~0x200;
+        }
+    }
+    
+    // ====================================================================
+    // DIMENSIONS — Custom dimensional rendering systems
+    // ====================================================================
+    _applyDimensions(cfg, dimensions) {
+        for (const dim of dimensions) {
+            if (dim.binaryData && cfg.__binaryBlocks?.[dim.binaryData]) {
+                const blob = cfg.__binaryBlocks[dim.binaryData];
+                this._registerBinaryDimension(dim.name, dim.count, blob);
+            } else if (dim.type === '2D') {
+                const d = new Dimension2D();
+                if (dim.customName) d.name = dim.customName;
+                this.kernel.currentGPU?.addDimension(d);
+            } else if (dim.type === 'Mixel') {
+                this.kernel.currentGPU?.addDimension(new MixelDimension());
+            } else if (dim.type === 'custom' && dim.factoryCode) {
+                this._registerCustomDimension(dim, cfg);
+            }
+        }
+    }
+    
     _registerBinaryDimension(name, count, blob) {
         const gpu = this.kernel.currentGPU;
         if (!gpu) return;
@@ -192,6 +252,26 @@ class MiniExtensionLoader {
         gpu.frames.set(name, dim.createFrame(gpu.width, gpu.height));
         if (!gpu.activeDim) gpu.activeDim = name;
     }
+    
+    _registerCustomDimension(dim, cfg) {
+        const gpu = this.kernel.currentGPU;
+        if (!gpu) return;
+        try {
+            const fn = new Function('Frame2D', 'Pixel2D', 'Mixel', 'BinaryBlob', 'UInt74', dim.factoryCode);
+            const customDim = fn(Frame2D, Pixel2D, Mixel, BinaryBlob, UInt74);
+            if (customDim.name) gpu.addDimension(customDim);
+        } catch(e) { /* skip */ }
+    }
+    
+    // ====================================================================
+    // FRAME ELEMENTS — Custom pixel/element types for rendering
+    // ====================================================================
+    _applyFrameElements(cfg, frameElements) {
+        for (const fe of frameElements) {
+            this._registerFrameElement(fe.name, fe.factory, cfg);
+        }
+    }
+    
     _registerFrameElement(name, factoryCode, cfg) {
         try {
             const fn = new Function('Pixel2D', 'Mixel', 'BinaryBlob', 'UInt74', factoryCode);
@@ -199,6 +279,16 @@ class MiniExtensionLoader {
             this[name] = element;
         } catch(e) { /* skip invalid */ }
     }
+    
+    // ====================================================================
+    // CPU EXTENSIONS — Custom opcode handlers
+    // ====================================================================
+    _applyCpuExtensions(cfg, cpuExtensions) {
+        for (const ext of cpuExtensions) {
+            this._applyCpuExtension(ext.opcode, ext.handler, cfg);
+        }
+    }
+    
     _applyCpuExtension(opcode, handlerCode, cfg) {
         const cpu = this.kernel.currentCPU;
         if (!cpu || !cpu.cycle) return;
@@ -208,18 +298,88 @@ class MiniExtensionLoader {
             cpu.__extensions[opcode] = fn;
         } catch(e) { /* skip */ }
     }
+    
+    // ====================================================================
+    // GPU INSTRUCTIONS — Custom GPU rendering commands
+    // ====================================================================
+    _applyGpuInstructions(cfg, gpuInstructions) {
+        const gpu = this.kernel.currentGPU;
+        if (!gpu) return;
+        
+        if (!gpu.__customInstructions) gpu.__customInstructions = new Map();
+        
+        for (const instr of gpuInstructions) {
+            try {
+                const fn = new Function('gpu', 'bus', 'args', 'UInt74', 'BinaryBlob', 'Dimension2D', 'Frame2D', 'Pixel2D', instr.handler);
+                gpu.__customInstructions.set(instr.command, {
+                    name: instr.name || `cmd_${instr.command}`,
+                    handler: fn,
+                    description: instr.description || ''
+                });
+                this._gpuInstructionSet.set(instr.command, instr);
+            } catch(e) { /* skip */ }
+        }
+        
+        // Patch GPU to support custom instructions
+        if (!gpu._origExecuteCommand) {
+            gpu._origExecuteCommand = gpu.executeCommand || (() => {});
+            gpu.executeCommand = (cmd, ...args) => {
+                if (gpu.__customInstructions?.has(cmd)) {
+                    const instr = gpu.__customInstructions.get(cmd);
+                    return instr.handler(gpu, gpu.bus, args, UInt74, BinaryBlob, Dimension2D, Frame2D, Pixel2D);
+                }
+                return gpu._origExecuteCommand(cmd, ...args);
+            };
+        }
+    }
+    
+    // ====================================================================
+    // MEMORY MAP — Define memory regions and their contents
+    // ====================================================================
     _applyMemoryMap(memoryMap) {
         const bus = this.kernel.bus;
         if (!bus || !memoryMap) return;
+        
         for (const region of memoryMap) {
+            // Pre-allocate memory pages for region
+            if (region.size) {
+                const startPage = Math.floor(region.address / bus.pageSize);
+                const endPage = Math.floor((region.address + region.size - 1) / bus.pageSize);
+                for (let p = startPage; p <= endPage; p++) {
+                    if (!bus.pages.has(p) && bus.pages.size < bus.maxPages) {
+                        bus.pages.set(p, new Uint8Array(bus.pageSize));
+                    }
+                }
+            }
+            
+            // Load data if provided
             if (region.data && typeof region.data === 'string') {
                 const blob = new BinaryBlob(region.data);
-                for (let i = 0; i < blob.length && region.address + i < 0x10000; i++) {
+                const limit = Math.min(blob.length, region.size || blob.length);
+                for (let i = 0; i < limit && region.address + i < 0x10000000; i++) {
                     bus.writeByte(region.address + i, blob.readByte(i));
                 }
             }
+            
+            // Mark as read-only if specified
+            if (region.readonly && bus.__readOnlyRegions === undefined) {
+                bus.__readOnlyRegions = new Set();
+            }
+            if (region.readonly) {
+                bus.__readOnlyRegions.add(`${region.address}-${region.address + (region.size || 0x10000)}`);
+            }
         }
     }
+    
+    // ====================================================================
+    // I/O DEVICES — Register memory-mapped I/O device handlers
+    // ====================================================================
+    _applyIODevices(cfg, ioDevices) {
+        for (const dev of ioDevices) {
+            this._registerIODevice(dev.port, dev.name, dev.handler, cfg);
+        }
+    }
+    
     _registerIODevice(port, name, handlerCode, cfg) {
         const bus = this.kernel.bus;
         if (!bus) return;
@@ -229,6 +389,118 @@ class MiniExtensionLoader {
             bus.__ioDevices[port] = { name, handler: fn };
         } catch(e) { /* skip */ }
     }
+    
+    // ====================================================================
+    // EMULATED DEVICES — Full virtual hardware device definitions
+    // ====================================================================
+    _applyEmulatedDevices(cfg, devices) {
+        for (const device of devices) {
+            this._registerEmulatedDevice(device, cfg);
+        }
+    }
+    
+    _registerEmulatedDevice(device, cfg) {
+        const kernel = this.kernel;
+        const bus = kernel.bus;
+        if (!bus) return;
+        
+        const devInstance = {
+            name: device.name,
+            type: device.type || 'generic',
+            vendorId: device.vendorId || 0,
+            deviceId: device.deviceId || 0,
+            memoryRegions: [],
+            ioPorts: [],
+            dmaChannels: [],
+            state: {},
+            _handlers: {}
+        };
+        
+        // Allocate memory regions for the device
+        if (device.memoryRegions) {
+            for (const region of device.memoryRegions) {
+                const startPage = Math.floor(region.address / bus.pageSize);
+                const endPage = Math.floor((region.address + region.size - 1) / bus.pageSize);
+                for (let p = startPage; p <= endPage; p++) {
+                    if (!bus.pages.has(p)) bus.pages.set(p, new Uint8Array(bus.pageSize));
+                }
+                devInstance.memoryRegions.push(region);
+                
+                // Load initial data if provided
+                if (region.initialData && cfg.__binaryBlocks?.[region.initialData]) {
+                    const blob = cfg.__binaryBlocks[region.initialData];
+                    for (let i = 0; i < blob.length && i < region.size; i++) {
+                        bus.writeByte(region.address + i, blob.readByte(i));
+                    }
+                }
+            }
+        }
+        
+        // Register I/O port handlers
+        if (device.ioPorts) {
+            if (!bus.__ioDevices) bus.__ioDevices = {};
+            for (const port of device.ioPorts) {
+                if (port.handler) {
+                    try {
+                        const fn = new Function('bus', 'value', 'isWrite', 'device', 'UInt74', 'BinaryBlob', port.handler);
+                        bus.__ioDevices[port.address] = { name: `${device.name}_${port.name}`, handler: fn };
+                        devInstance.ioPorts.push(port);
+                        devInstance._handlers[port.address] = fn;
+                    } catch(e) { /* skip */ }
+                }
+            }
+        }
+        
+        // Configure DMA channels
+        if (device.dmaChannels) {
+            for (const dma of device.dmaChannels) {
+                devInstance.dmaChannels.push(dma);
+                // Store DMA config in device state
+                devInstance.state[`dma_${dma.channel}`] = {
+                    source: dma.source || 0,
+                    destination: dma.destination || 0,
+                    length: dma.length || 0,
+                    control: dma.control || 0
+                };
+            }
+        }
+        
+        // Store device instance
+        if (!kernel.__emulatedDevices) kernel.__emulatedDevices = new Map();
+        kernel.__emulatedDevices.set(device.name, devInstance);
+        this._deviceRegistry.set(device.name, devInstance);
+        
+        // Apply device capabilities
+        if (device.capabilities) {
+            for (const cap of device.capabilities) {
+                switch (cap) {
+                    case 'gpu-accelerated':
+                        if (kernel.currentGPU) kernel.currentGPU.__accelerated = true;
+                        break;
+                    case 'audio':
+                        if (!kernel.__audioDevices) kernel.__audioDevices = [];
+                        kernel.__audioDevices.push(devInstance);
+                        break;
+                    case 'input':
+                        if (!kernel.__inputDevices) kernel.__inputDevices = [];
+                        kernel.__inputDevices.push(devInstance);
+                        break;
+                    case 'storage':
+                        if (!kernel.__storageDevices) kernel.__storageDevices = [];
+                        kernel.__storageDevices.push(devInstance);
+                        break;
+                    case 'network':
+                        if (!kernel.__networkDevices) kernel.__networkDevices = [];
+                        kernel.__networkDevices.push(devInstance);
+                        break;
+                }
+            }
+        }
+    }
+    
+    // ====================================================================
+    // CONSOLE — Pre-configured console emulator definition
+    // ====================================================================
     _registerConsole(consoleConfig) {
         const kernel = this.kernel;
         if (!kernel || !consoleConfig) return;
@@ -239,14 +511,12 @@ class MiniExtensionLoader {
         const cpuExtensions = consoleConfig.cpuExtensions || [];
         const customOpcodes = consoleConfig.customOpcodes || {};
         
-        // Store console definition on kernel for later use
         if (!kernel.__consoles) kernel.__consoles = {};
         kernel.__consoles[name] = {
             name, bits, gpuMode, memoryMap, cpuExtensions, customOpcodes,
             createdAt: new Date()
         };
         
-        // Apply custom opcodes to current CPU
         const cpu = kernel.currentCPU;
         if (cpu && customOpcodes) {
             if (!cpu.__extensions) cpu.__extensions = {};
@@ -258,7 +528,6 @@ class MiniExtensionLoader {
             }
         }
         
-        // Apply memory map if provided
         if (memoryMap.regions) {
             const bus = kernel.bus;
             for (const region of memoryMap.regions) {
@@ -271,6 +540,99 @@ class MiniExtensionLoader {
             }
         }
     }
+    
+    // ====================================================================
+    // BIOS CONFIG — BIOS firmware overrides and configuration
+    // ====================================================================
+    _applyBiosConfig(biosConfig) {
+        const kernel = this.kernel;
+        if (!kernel || !biosConfig) return;
+        
+        if (biosConfig.source) {
+            const fw = kernel.compileFirmware(biosConfig.source);
+            if (fw && fw.isValid && biosConfig.autoLoad) {
+                kernel.loadBios(fw.firmwareName, fw.version);
+            }
+        }
+        if (biosConfig.interruptTable) {
+            if (kernel.bios) {
+                for (const [vector, handler] of Object.entries(biosConfig.interruptTable)) {
+                    kernel.bios.interruptTable.set(parseInt(vector), handler);
+                }
+            }
+        }
+        if (biosConfig.customHandlers) {
+            if (!kernel.__biosHandlers) kernel.__biosHandlers = {};
+            for (const [vector, handlerCode] of Object.entries(biosConfig.customHandlers)) {
+                try {
+                    const fn = new Function('bus', 'cpu', 'gpu', 'UInt74', 'BinaryBlob', handlerCode);
+                    kernel.__biosHandlers[parseInt(vector)] = fn;
+                } catch(e) { /* skip */ }
+            }
+        }
+    }
+    
+    // ====================================================================
+    // NETWORK CONFIG — Network controller settings
+    // ====================================================================
+    _applyNetworkConfig(netConfig) {
+        const nic = this.kernel.bus?.networkController;
+        if (!nic || !netConfig) return;
+        
+        if (netConfig.macAddress) {
+            nic.mac = BigInt(netConfig.macAddress);
+            nic.bus.writeDWord(0xFFA4, Number(nic.mac & 0xFFFFFFFFn));
+            nic.bus.writeWord(0xFFA8, Number((nic.mac >> 32n) & 0xFFFFn));
+        }
+        if (netConfig.maxPacketSize) nic._maxPacketSize = netConfig.maxPacketSize;
+        if (netConfig.maxQueueSize) nic._maxQueueSize = netConfig.maxQueueSize;
+        if (netConfig.promiscuousMode !== undefined) nic._promiscuous = netConfig.promiscuousMode;
+    }
+    
+    // ====================================================================
+    // STORAGE CONFIG — Disk controller settings
+    // ====================================================================
+    _applyStorageConfig(storageConfig) {
+        const disk = this.kernel.bus?.diskController;
+        if (!disk || !storageConfig) return;
+        
+        if (storageConfig.maxSectors) disk._maxSectors = storageConfig.maxSectors;
+        if (storageConfig.sectorSize) disk._sectorSize = storageConfig.sectorSize;
+        if (storageConfig.autoMount && storageConfig.diskImage) {
+            const blob = new BinaryBlob(storageConfig.diskImage);
+            disk.mountDiskImage(blob.data);
+        }
+    }
+    
+    // ====================================================================
+    // AUDIO CONFIG — Audio device settings
+    // ====================================================================
+    _applyAudioConfig(audioConfig) {
+        const kernel = this.kernel;
+        if (!kernel || !audioConfig) return;
+        
+        if (!kernel.__audioConfig) kernel.__audioConfig = {};
+        kernel.__audioConfig = {
+            channels: audioConfig.channels || 2,
+            sampleRate: audioConfig.sampleRate || 44100,
+            bitsPerSample: audioConfig.bitsPerSample || 16,
+            bufferSize: audioConfig.bufferSize || 4096,
+            enabled: audioConfig.enabled !== false
+        };
+        
+        // Initialize audio buffer if enabled
+        if (kernel.__audioConfig.enabled) {
+            kernel.__audioBuffer = new Float32Array(kernel.__audioConfig.bufferSize * kernel.__audioConfig.channels);
+        }
+    }
+    
+    // ====================================================================
+    // DEVICE REGISTRY — Query registered devices
+    // ====================================================================
+    getDevices() { return Array.from(this._deviceRegistry.values()); }
+    getDevice(name) { return this._deviceRegistry.get(name); }
+    getGpuInstructions() { return Array.from(this._gpuInstructionSet.values()); }
+    getHardwareLimits() { return this._hardwareLimits; }
 }
 
 // ──────────────────────────────────────────────
@@ -300,7 +662,6 @@ class VOSConfigLoader {
         return null;
     }
 }
-
 // ──────────────────────────────────────────────
 // Console Emulator Factory – creates custom console emulators
 // ──────────────────────────────────────────────
