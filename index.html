@@ -2,409 +2,81 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>MiniOS - REAL Tile-Based 74-Bit Operating System</title>
+    <title>VirtualOS 74-Bit Test</title>
     <style>
-        body {
-            background: #0a0a0f;
-            font-family: monospace;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-        }
-        .container {
-            background: #1a1a2a;
-            border: 2px solid #00ffaa;
-            border-radius: 12px;
-            padding: 20px;
-        }
-        canvas {
-            display: block;
-            margin: 0 auto;
-            image-rendering: pixelated;
-            box-shadow: 0 0 20px rgba(0,255,170,0.2);
-        }
-        .info {
-            margin-top: 15px;
-            color: #00ffaa;
-            font-size: 12px;
-        }
-        button {
-            background: #0a0a0f;
-            color: #00ffaa;
-            border: 1px solid #00ffaa;
-            border-radius: 6px;
-            padding: 8px 16px;
-            margin: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #00ffaa;
-            color: #0a0a0f;
-        }
-        .log {
-            background: #0a0a0f;
-            border: 1px solid #2a2a3a;
-            border-radius: 6px;
-            padding: 10px;
-            margin-top: 10px;
-            font-size: 11px;
-            max-height: 150px;
-            overflow-y: auto;
-            color: #00ffaa;
-        }
+        body { background:#0a0a0f; color:#c0c0d0; font-family:monospace; padding:20px; }
+        canvas { border:2px solid #444; image-rendering:pixelated; width:512px; height:512px; background:#000; cursor:none; }
+        .bar { background:#000; border:1px solid #333; padding:8px; margin-top:8px; font-size:11px; color:#00cc88; }
+        button { padding:6px 14px; margin:4px; border:1px solid #00cc88; background:transparent; color:#00cc88; cursor:pointer; }
+        button:disabled { opacity:0.3; }
     </style>
 </head>
 <body>
-<div class="container">
+    <div id="errLog" style="background:#300;color:#f44;font-size:9px;padding:4px;max-height:100px;overflow:auto;display:none;"></div>
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            const el = document.getElementById('errLog');
+            el.style.display = 'block';
+            el.textContent += '❌ Line ' + line + ': ' + msg + '\n';
+        };
+    </script>
     <canvas id="screen" width="256" height="256"></canvas>
-    <div class="info">
-        <span id="status">🔴 MINIOS - 74-BIT TILE GPU</span>
-    </div>
-    <div>
-        <button id="btnPower">💾 POWER ON & LOAD OS</button>
-        <button id="btnTileTest" disabled>🧱 WRITE TILE</button>
-        <button id="btnScroll" disabled>📜 TOGGLE SCROLL</button>
-    </div>
-    <div class="log" id="log"></div>
-</div>
+    <div class="bar" id="log">[SYSTEM] Ready</div>
+    <button onclick="boot()">⚡ BOOT</button>
+    <button id="dimBtn" onclick="addDims()" disabled>➕ DIMS</button>
+    <button id="switchBtn" onclick="switchDim()" disabled>🔄 SWITCH</button>
+    <button id="offBtn" onclick="shutdown()" disabled>⏻ OFF</button>
+    <script src="VirtualOs.js"></script>
+    <script>
+        let os, booted, dims=[], W=256, H=256;
+        const c=document.getElementById('screen'), ctx=c.getContext('2d');
+        const PAL=[[0,0,0],[255,255,255],[255,60,60],[60,255,60],[60,60,255],[255,255,60],[255,60,255],[60,255,255],[255,140,30],[140,60,255],[60,140,255],[255,140,200],[100,60,30],[200,180,150],[255,215,0],[80,80,80]];
+        let mx=128,my=128,ml=0,mr=0,keys=new Set();
+        function log(s){ const el=document.getElementById('log'); el.textContent=s; console.log(s); }
 
-<script src="VirtualOS.js"></script>
-<script>
-    // ============================================================
-    // MINIOS - REAL TILE-BASED GPU EMULATION
-    // Uses the ACTUAL tile rendering engine from VirtualOS GPU
-    // NO pixel mode fallback - pure tile/sprite hardware
-    // ============================================================
-    
-    const canvas = document.getElementById('screen');
-    const ctx = canvas.getContext('2d');
-    const logDiv = document.getElementById('log');
-    const statusSpan = document.getElementById('status');
-    
-    let kernel = null;
-    let running = false;
-    let animFrame = null;
-    let scrollInterval = null;
-    
-    function log(msg) {
-        const entry = document.createElement('div');
-        entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-        logDiv.appendChild(entry);
-        logDiv.scrollTop = logDiv.scrollHeight;
-        console.log(msg);
-    }
-    
-    // 15-bit color palette (GBA style - matches VirtualOS GPU)
-    const pal = [
-        0x0000, 0xFFFF, 0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF,
-        0x7C1F, 0x1F7C, 0x1C3F, 0x7FFF, 0x7C00, 0x03E0, 0x001C, 0x5294
-    ];
-    
-    // Convert 15-bit color to RGB for canvas
-    function color15toRGB(color15) {
-        const r = ((color15 >> 10) & 0x1F) << 3;
-        const g = ((color15 >> 5) & 0x1F) << 3;
-        const b = (color15 & 0x1F) << 3;
-        return [r, g, b];
-    }
-    
-    function renderFromGPU() {
-        if (!kernel || !kernel.poweredOn || !kernel.currentGPU) {
-            ctx.fillStyle = "#000";
-            ctx.fillRect(0, 0, 256, 256);
-            return;
+        const FONT={ 'A':[0x1E,0x21,0x21,0x3F,0x21,0x21],'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],'C':[0x1E,0x21,0x20,0x20,0x21,0x1E],'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F],'I':[0x1F,0x04,0x04,0x04,0x04,0x1F],'L':[0x20,0x20,0x20,0x20,0x20,0x3F],'M':[0x21,0x33,0x2D,0x21,0x21,0x21],'N':[0x21,0x31,0x29,0x25,0x23,0x21],'O':[0x1E,0x21,0x21,0x21,0x21,0x1E],'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E],'T':[0x3F,0x04,0x04,0x04,0x04,0x04],'U':[0x21,0x21,0x21,0x21,0x21,0x1E],'V':[0x21,0x21,0x21,0x21,0x12,0x0C],'W':[0x21,0x21,0x21,0x2D,0x33,0x21],'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],'Y':[0x21,0x12,0x0C,0x04,0x04,0x04],'0':[0x1E,0x23,0x25,0x29,0x31,0x1E],'1':[0x0C,0x14,0x04,0x04,0x04,0x1F],'2':[0x1E,0x21,0x02,0x0C,0x10,0x3F],'3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],'4':[0x22,0x22,0x22,0x3F,0x02,0x02],'5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],'6':[0x1E,0x20,0x3E,0x21,0x21,0x1E],'7':[0x3F,0x01,0x02,0x04,0x08,0x10],'8':[0x1E,0x21,0x1E,0x21,0x21,0x1E],'9':[0x1E,0x21,0x21,0x1F,0x01,0x1E],' ':[0,0,0,0,0,0],':':[0,0x06,0x06,0,0x06,0x06],'-':[0,0,0x3F,0,0,0],'|':[0x04,0x04,0x04,0x04,0x04,0x04],'[':[0x1E,0x10,0x10,0x10,0x10,0x1E],']':[0x3C,0x04,0x04,0x04,0x04,0x3C],'*':[0x14,0x08,0x3E,0x08,0x14,0],'/':[0x01,0x02,0x04,0x08,0x10,0x20] };
+        function drawText(img,text,x,y,color){ const chars=text.toUpperCase().split(''); for(let ci=0;ci<chars.length;ci++){ const glyph=FONT[chars[ci]]||FONT[' ']; for(let row=0;row<6;row++){ for(let px=0;px<6;px++){ if(glyph[row]&(1<<(5-px))){ const sx=x+ci*7+px,sy=y+row; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const[c1,c2,c3]=PAL[color%16]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } } } } } }
+
+        async function boot(){
+            os=new VirtualOS.Kernel74();
+            await os.loadConfig('VOS.config.js');
+            os.switchTo74Bit();
+            const g=os.currentGPU;
+            g.addDimension(new VirtualOS.Dimension2D());
+            g.addDimension(new VirtualOS.MixelDimension());
+            g.setActiveDimension('2D'); dims=g.getAvailableDimensions();
+            os.powerOn(new Uint8Array(256));
+            booted=true;
+            document.querySelectorAll('button').forEach(b=>b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'?b.disabled=true:b.disabled=false);
+            log('BOOTED - Mode:'+os.currentMode+' Dims:'+dims.join(','));
+            requestAnimationFrame(loop);
         }
-        
-        const fb = kernel.currentGPU.getFramebuffer();
-        if (!fb || fb.length !== 65536) {
-            ctx.fillStyle = "#001020";
-            ctx.fillRect(0, 0, 256, 256);
-            return;
+        function shutdown(){ os.powerOff(); os=null; booted=false; ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H); log('OFF'); document.querySelectorAll('button').forEach(b=>b.disabled=b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'); }
+        function addDims(){ if(!os)return; const g=os.currentGPU; if(!dims.includes('MixelSpace')) g.addDimension(new VirtualOS.MixelDimension()); dims=g.getAvailableDimensions(); log('Dims:'+dims.join(',')); }
+        function switchDim(){ if(!os)return; const g=os.currentGPU; g.setActiveDimension(dims.find(d=>d!==g.activeDim)||dims[0]); log('Active:'+g.activeDim); }
+
+        let fc=0,ft=performance.now(),fps=0;
+        function loop(ts){
+            if(!booted||!os) return requestAnimationFrame(loop);
+            const g=os.currentGPU, img=ctx.createImageData(W,H);
+            for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const p=(y*W+x)*4; const bg=y<20?1:y>H-20?2:0; const[c1,c2,c3]=PAL[bg]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; img.data[p+3]=255; }
+            drawText(img,'VirtualOS 74-Bit',8,4,7);
+            drawText(img,'Desktop Ready',8,14,3);
+            drawText(img,'Mode:'+os.currentMode,8,24,5);
+            drawText(img,'Dims:'+(dims.join(',')||'none'),8,34,5);
+            const cur=[[1,0,0,0,0,0,0,0],[1,1,0,0,0,0,0,0],[1,2,1,0,0,0,0,0],[1,2,2,1,0,0,0,0],[1,2,2,2,1,0,0,0],[1,2,2,2,2,1,0,0],[1,2,2,2,2,2,1,0],[1,2,2,2,2,2,2,1],[1,2,2,2,2,2,1,0],[0,1,2,2,1,2,1,0],[0,0,1,1,0,0,1,1],[0,0,0,0,0,0,0,1]];
+            for(let y=0;y<cur.length;y++) for(let x=0;x<cur[y].length;x++){ const v=cur[y][x]; if(!v)continue; const sx=mx+x,sy=my+y; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const cl=v===1?15:0; const[c1,c2,c3]=PAL[cl]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } }
+            ctx.putImageData(img,0,0);
+            fc++; if(ts-ft>=1000){ fps=fc; fc=0; ft=ts; }
+            log(`FPS:${fps} Frame:${g.frameCount} Mode:${os.currentMode} GPU:${g.activeDim} Mouse:${mx},${my} RAM:${Math.floor((os.bus?.usedRam||0)/1024)}KB`);
+            requestAnimationFrame(loop);
         }
-        
-        const imgData = ctx.createImageData(256, 256);
-        for (let i = 0; i < 65536; i++) {
-            const col = fb[i];
-            const [r, g, b] = color15toRGB(col);
-            const idx = i * 4;
-            imgData.data[idx] = r;
-            imgData.data[idx+1] = g;
-            imgData.data[idx+2] = b;
-            imgData.data[idx+3] = 255;
-        }
-        ctx.putImageData(imgData, 0, 0);
-    }
-    
-    function renderLoop() {
-        if (running && kernel && kernel.poweredOn) {
-            kernel.run(2000);
-        }
-        renderFromGPU();
-        animFrame = requestAnimationFrame(renderLoop);
-    }
-    
-    // ============================================================
-    // BUILD MINIOS WITH REAL TILE-BASED GPU
-    // ============================================================
-    async function buildMiniOS() {
-        log("========================================");
-        log("BUILDING MINIOS - REAL TILE GPU HARDWARE");
-        log("========================================");
-        
-        // Create console with TILE MODE GPU (not pixel mode!)
-        const miniConsole = VirtualOS.ConsoleEmulatorFactory.createCustom({
-            name: "MiniOS",
-            bits: 32,  // Stable 32-bit mode for tile rendering
-            memoryLayout: {
-                vram: { startAddress: 0x06000000, size: 0x00018000 },
-                tilemap: { startAddress: 0x06000000, size: 0x00000800 },
-                tiledata: { startAddress: 0x06004000, size: 0x00004000 },
-                palette: { startAddress: 0x05000000, size: 0x00000200 }
-            },
-            cartridgeFormat: {
-                romStartAddress: 0x08000000,
-                headerOffset: 0,
-                headerLength: 0
-            },
-            gpuConfig: {
-                mode: 'tile',      // TILE MODE - REAL hardware rendering
-                displayWidth: 256,
-                displayHeight: 256,
-                refreshRate: 60,
-                layers: 4,         // 4 background layers
-                sprites: 128       // 128 hardware sprites
-            },
-            // Custom opcodes become REAL CPU instructions
-            customOpcodes: {
-                0xF0: `(bus, regs) => {
-                    // CPU instruction: WRITE_TILEMAP
-                    const addr = Number(regs[1]) & 0xFFFF;
-                    const value = Number(regs[2]) & 0xFF;
-                    bus.writeByte(addr, value);
-                }`
-            }
-        });
-        
-        const kernelObj = miniConsole.kernel;
-        kernelObj.switchTo32Bit();
-        const gpu = kernelObj.currentGPU;
-        
-        log("✓ 32-bit CPU active");
-        log("✓ Tile-based GPU active");
-        log("✓ 4 background layers available");
-        log("✓ 128 hardware sprites available");
-        
-        // ============================================
-        // LOAD REAL TILE DATA INTO GPU MEMORY
-        // These tiles will be rendered by the hardware
-        // ============================================
-        
-        // Create 8x8 tile patterns (64 tiles total)
-        for (let tile = 0; tile < 64; tile++) {
-            for (let row = 0; row < 8; row++) {
-                for (let col = 0; col < 8; col++) {
-                    const pattern = (tile + row + col) % 16;
-                    let color = 0;
-                    if (pattern < 2) color = 1;
-                    else if (pattern < 4) color = 2;
-                    else if (pattern < 6) color = 3;
-                    else if (pattern < 8) color = 4;
-                    else if (pattern < 10) color = 5;
-                    else if (pattern < 12) color = 6;
-                    else if (pattern < 14) color = 7;
-                    else color = 8;
-                    
-                    // Write to tile data memory (8x8 = 64 bytes per tile)
-                    const tileAddr = 0x06004000 + (tile * 64) + (row * 8) + col;
-                    kernelObj.bus.writeByte(tileAddr, color);
-                }
-            }
-        }
-        log("✓ 64 tiles loaded into tile data memory (0x06004000)");
-        
-        // Fill tilemap (32x32 grid = 1024 tiles)
-        for (let ty = 0; ty < 32; ty++) {
-            for (let tx = 0; tx < 32; tx++) {
-                const tilemapAddr = 0x06000000 + (ty * 32 + tx);
-                const tileNum = (ty * 2 + tx) % 64;
-                kernelObj.bus.writeByte(tilemapAddr, tileNum);
-            }
-        }
-        log("✓ Tilemap initialized at 0x06000000 (32x32 grid)");
-        
-        // Load palette into GPU palette memory
-        for (let i = 0; i < 16; i++) {
-            const palAddr = 0x05000000 + (i * 2);
-            kernelObj.bus.writeWord(palAddr, pal[i]);
-        }
-        log("✓ 16-color palette loaded at 0x05000000");
-        
-        // ============================================
-        // CONFIGURE GPU REGISTERS (REAL HARDWARE)
-        // ============================================
-        kernelObj.bus.writeWord(0xFF04, 256);           // Display width
-        kernelObj.bus.writeWord(0xFF06, 256);           // Display height
-        kernelObj.bus.writeDWord(0xFF0C, 0x06000000);   // Tilemap base address
-        kernelObj.bus.writeDWord(0xFF10, 0x06004000);   // Tiledata base address
-        kernelObj.bus.writeDWord(0xFF14, 0x05000000);   // Palette base address
-        kernelObj.bus.writeByte(0xFF00, 0x01);          // Enable background layer 0
-        kernelObj.bus.writeByte(0xFF02, 0x00);          // Mode 0 = tile mode
-        log("✓ GPU registers configured (tile mode enabled)");
-        
-        // Start GPU rendering engine
-        gpu.startRendering(60);
-        log("✓ GPU rendering started (60 FPS)");
-        
-        // ============================================
-        // LOAD MINIOS KERNEL ROM (REAL MACHINE CODE)
-        // ============================================
-        const kernelROM = new Uint8Array(1024);
-        let p = 0;
-        
-        // ROM Header
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x01; kernelROM[p++] = 0x4D; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'M'
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x02; kernelROM[p++] = 0x69; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'i'
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x03; kernelROM[p++] = 0x4E; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'N'
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x04; kernelROM[p++] = 0x49; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'I'
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x05; kernelROM[p++] = 0x4F; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'O'
-        kernelROM[p++] = 0x11; kernelROM[p++] = 0x06; kernelROM[p++] = 0x53; kernelROM[p++] = 0; kernelROM[p++] = 0; kernelROM[p++] = 0; // 'S'
-        
-        // HALT
-        kernelROM[p++] = 0xFF;
-        
-        // Write kernel ROM to memory
-        for (let i = 0; i < kernelROM.length; i++) {
-            kernelObj.bus.writeByte32(0x08000000 + i, kernelROM[i]);
-        }
-        
-        // Set CPU instruction pointer and boot
-        kernelObj.currentCPU.ip = 0x08000000;
-        kernelObj.powerOn(new Uint8Array(256));
-        kernelObj.poweredOn = true;
-        kernelObj.currentCPU.halted = false;
-        
-        log("✓ MiniOS kernel loaded at 0x08000000");
-        log("✓ CPU IP set to 0x08000000");
-        log("========================================");
-        log("✅ MINIOS BOOTED - TILE GPU ACTIVE");
-        log("========================================");
-        
-        return kernelObj;
-    }
-    
-    // ============================================================
-    // WRITE TO TILEMAP VIA REAL CPU INSTRUCTION
-    // ============================================================
-    async function writeTileTest() {
-        if (!kernel || !kernel.poweredOn) return;
-        log("🎮 Executing CPU instruction to modify tilemap...");
-        
-        // Create ROM that writes new tile data
-        const testROM = new Uint8Array(64);
-        let p = 0;
-        
-        // Write tile 42 at position (15, 15) in tilemap
-        const tilemapPos = 0x06000000 + (15 * 32 + 15);
-        testROM[p++] = 0x11; testROM[p++] = 0x01; 
-        testROM[p++] = tilemapPos & 0xFF; testROM[p++] = (tilemapPos >> 8) & 0xFF;
-        testROM[p++] = (tilemapPos >> 16) & 0xFF; testROM[p++] = 0;
-        testROM[p++] = 0x11; testROM[p++] = 0x02; testROM[p++] = 42; testROM[p++] = 0; testROM[p++] = 0; testROM[p++] = 0;
-        testROM[p++] = 0xF0;  // Custom instruction to write tilemap
-        testROM[p++] = 0xFF;  // HALT
-        
-        for (let i = 0; i < testROM.length; i++) {
-            kernel.bus.writeByte32(0x0A000000 + i, testROM[i]);
-        }
-        
-        const oldIP = kernel.currentCPU.ip;
-        kernel.currentCPU.ip = 0x0A000000;
-        kernel.currentCPU.halted = false;
-        
-        // Execute
-        let cycles = 0;
-        while (!kernel.currentCPU.halted && cycles < 100) {
-            kernel.currentCPU.cycle();
-            cycles++;
-        }
-        
-        kernel.currentCPU.ip = oldIP;
-        log(`✅ Tilemap modified via CPU instruction (${cycles} cycles)`);
-    }
-    
-    // ============================================================
-    // TOGGLE SCROLLING VIA GPU REGISTERS
-    // ============================================================
-    function toggleScroll() {
-        if (!kernel || !kernel.poweredOn) return;
-        
-        if (scrollInterval) {
-            clearInterval(scrollInterval);
-            scrollInterval = null;
-            kernel.bus.writeWord(0xFF08, 0);
-            kernel.bus.writeWord(0xFF0A, 0);
-            log("📜 Scrolling disabled");
-        } else {
-            let sx = 0, sy = 0, dx = 1, dy = 1;
-            scrollInterval = setInterval(() => {
-                if (!kernel || !kernel.poweredOn) {
-                    clearInterval(scrollInterval);
-                    scrollInterval = null;
-                    return;
-                }
-                sx += dx;
-                sy += dy;
-                if (sx > 64 || sx < 0) { dx = -dx; sx += dx; }
-                if (sy > 64 || sy < 0) { dy = -dy; sy += dy; }
-                kernel.bus.writeWord(0xFF08, sx);
-                kernel.bus.writeWord(0xFF0A, sy);
-            }, 50);
-            log("📜 Scrolling enabled - tilemap scrolling active");
-        }
-    }
-    
-    async function powerOn() {
-        if (kernel && kernel.poweredOn) {
-            log("System already running");
-            return;
-        }
-        kernel = await buildMiniOS();
-        running = true;
-        document.getElementById('btnTileTest').disabled = false;
-        document.getElementById('btnScroll').disabled = false;
-        statusSpan.innerText = "🟢 MINIOS RUNNING - TILE GPU";
-        log("System ready. Click 'WRITE TILE' to execute CPU instruction.");
-    }
-    
-    function shutdown() {
-        if (kernel) kernel.powerOff();
-        running = false;
-        if (scrollInterval) clearInterval(scrollInterval);
-        scrollInterval = null;
-        document.getElementById('btnTileTest').disabled = true;
-        document.getElementById('btnScroll').disabled = true;
-        statusSpan.innerText = "⭕ SYSTEM OFFLINE";
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, 256, 256);
-        log("System offline");
-    }
-    
-    document.getElementById('btnPower').onclick = async () => {
-        if (running && kernel && kernel.poweredOn) shutdown();
-        else await powerOn();
-    };
-    document.getElementById('btnTileTest').onclick = writeTileTest;
-    document.getElementById('btnScroll').onclick = toggleScroll;
-    
-    renderLoop();
-    log("========================================");
-    log("MINIOS - REAL TILE GPU EMULATION");
-    log("This uses the ACTUAL tile-based GPU");
-    log("from VirtualOS.js - NOT pixel mode");
-    log("========================================");
-    log("Press POWER ON to boot the system");
-</script>
+        c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect(); mx=Math.floor((e.clientX-r.left)/2); my=Math.floor((e.clientY-r.top)/2); if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
+        c.addEventListener('mousedown',e=>{ e.preventDefault(); if(e.button===0)ml=1; if(e.button===2)mr=1; if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
+        c.addEventListener('mouseup',e=>{ if(e.button===0)ml=0; if(e.button===2)mr=0; });
+        c.addEventListener('contextmenu',e=>e.preventDefault());
+        document.addEventListener('keydown',e=>{ if(keys.has(e.code))return; keys.add(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode&0xFF); });
+        document.addEventListener('keyup',e=>{ keys.delete(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode&0xFF); });
+    </script>
 </body>
 </html>
