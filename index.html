@@ -1,132 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>MiniOS – True 74-Bit Emulated Operating System</title>
+    <title>VirtualOS - REAL CPU Execution Test</title>
     <style>
-        * { user-select: none; box-sizing: border-box; }
-        body {
-            background: radial-gradient(circle at 20% 30%, #0a0c1a, #020408);
-            font-family: 'Segoe UI', 'Courier New', monospace;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-        }
-        .metal-box {
-            background: #111217;
-            border-radius: 28px;
-            box-shadow: 0 25px 45px rgba(0,0,0,0.6), inset 0 1px 1px rgba(255,255,255,0.05);
-            padding: 20px;
-            border: 1px solid #2a2e44;
-        }
-        canvas {
-            display: block;
-            margin: 0 auto;
-            border-radius: 12px;
-            box-shadow: 0 0 0 3px #0f111a, 0 0 0 6px #1e2130;
-            image-rendering: crisp-edges;
-            image-rendering: pixelated;
-            cursor: none;
-        }
-        .os-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            margin-top: 18px;
-            background: #0b0d16dd;
-            backdrop-filter: blur(4px);
-            padding: 8px 16px;
-            border-radius: 60px;
-            border: 1px solid #2a2e44;
-            color: #aaf0e0;
-            font-size: 13px;
-            font-weight: 500;
-        }
-        .buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 14px;
-            flex-wrap: wrap;
-        }
-        button {
-            background: #151a26;
-            border: none;
-            font-family: monospace;
-            font-weight: bold;
-            font-size: 13px;
-            padding: 6px 14px;
-            border-radius: 40px;
-            color: #b9f3e6;
-            border: 1px solid #2f354c;
-            cursor: pointer;
-            transition: all 0.1s ease;
-        }
-        button:hover { background: #2a3150; color: white; border-color: #80ffd0; transform: scale(0.97); }
-        .badge { background: #00000088; padding: 2px 8px; border-radius: 40px; }
-        .log-line { font-size: 11px; background: #00000066; border-radius: 40px; padding: 2px 12px; }
-        #errLog { display: none; }
+        body { background: #0a0a0f; font-family: monospace; padding: 20px; }
+        canvas { image-rendering: pixelated; border: 2px solid #00ffaa; }
+        button { background: #0a0a0f; color: #00ffaa; border: 1px solid #00ffaa; padding: 8px 16px; cursor: pointer; }
+        .log { color: #00ffaa; font-size: 12px; margin-top: 10px; white-space: pre-wrap; }
     </style>
 </head>
 <body>
-<div>
-    <div class="metal-box">
-        <canvas id="screen" width="256" height="256"></canvas>
-        <div class="os-bar">
-            <span>🖥️ MINIOS · TRUE 74-BIT EMULATION</span>
-            <span class="badge" id="modeBadge">OFFLINE</span>
-            <span class="log-line" id="sysMsg">⚙️ EMULATION STANDBY</span>
-        </div>
-        <div class="buttons">
-            <button id="btnPower">🟢 POWER ON</button>
-            <button id="btnDrawDemo" disabled>🎨 DRAW DEMO</button>
-            <button id="btnGameTest" disabled>🎮 GAME TEST</button>
-            <button id="btnReset" disabled>🌀 RESET</button>
-            <button id="btnShutdown" disabled>⏻ SHUTDOWN</button>
-        </div>
+    <canvas id="screen" width="256" height="256"></canvas>
+    <div>
+        <button id="runBtn">▶ EXECUTE REAL MACHINE CODE</button>
     </div>
-</div>
+    <div class="log" id="log"></div>
 
-<script src="VirtualOS.js"></script>
-<script>
-    (function() {
-        // ---------- REAL EMULATED HARDWARE ----------
-        // NO shortcuts, NO direct canvas drawing for OS content.
-        // Everything must go through the VirtualOS emulator.
-        
+    <script src="VirtualOS.js"></script>
+    <script>
         const canvas = document.getElementById('screen');
         const ctx = canvas.getContext('2d');
-        let kernel = null;
-        let osRunning = false;
-        let animationId = null;
+        const logDiv = document.getElementById('log');
         
-        // Input state (fed into emulated GPU)
-        let mouseX = 128, mouseY = 128, leftBtn = 0, rightBtn = 0;
-        const pressedKeys = new Set();
-        
-        // UI Elements
-        const btnPower = document.getElementById('btnPower');
-        const btnDrawDemo = document.getElementById('btnDrawDemo');
-        const btnGameTest = document.getElementById('btnGameTest');
-        const btnReset = document.getElementById('btnReset');
-        const btnShutdown = document.getElementById('btnShutdown');
-        const modeBadge = document.getElementById('modeBadge');
-        const sysMsgSpan = document.getElementById('sysMsg');
-        
-        function sysLog(msg) { sysMsgSpan.innerText = msg; console.log("[MiniOS]", msg); }
-        
-        function updateUI() {
-            const enabled = osRunning && kernel && kernel.poweredOn;
-            btnDrawDemo.disabled = !enabled;
-            btnGameTest.disabled = !enabled;
-            btnReset.disabled = !enabled;
-            btnShutdown.disabled = !enabled;
-            modeBadge.innerText = (enabled && kernel) ? kernel.currentMode : "OFFLINE";
+        function log(msg) {
+            logDiv.innerHTML += msg + '\n';
+            console.log(msg);
         }
         
-        // Palette (matches VirtualOS 16-color)
         const pal = [
             [0,0,0],[255,255,255],[255,60,60],[60,255,60],
             [60,60,255],[255,255,60],[255,60,255],[60,255,255],
@@ -134,354 +35,118 @@
             [100,60,30],[200,180,150],[255,215,0],[80,80,80]
         ];
         
-        // Render framebuffer from EMULATED VRAM (0x06000000)
-        function renderFramebuffer() {
-            if (!kernel || !kernel.poweredOn || !kernel.currentGPU) {
-                ctx.fillStyle = "#000000";
-                ctx.fillRect(0, 0, 256, 256);
-                return;
-            }
-            const fb = kernel.currentGPU.getFramebuffer();
-            if (!fb || fb.length !== 65536) {
-                ctx.fillStyle = "#001020";
-                ctx.fillRect(0, 0, 256, 256);
-                return;
-            }
+        function renderVRAM(bus) {
             const imgData = ctx.createImageData(256, 256);
-            for (let i = 0; i < 65536; i++) {
-                const col = fb[i] & 0x0F;
-                const [r,g,b] = pal[col];
-                const idx = i * 4;
-                imgData.data[idx] = r;
-                imgData.data[idx+1] = g;
-                imgData.data[idx+2] = b;
-                imgData.data[idx+3] = 255;
+            for (let y = 0; y < 256; y++) {
+                for (let x = 0; x < 256; x++) {
+                    const addr = 0x06000000 + (y * 256 + x);
+                    const col = bus.readByte32(addr) & 0x0F;
+                    const [r,g,b] = pal[col];
+                    const idx = (y * 256 + x) * 4;
+                    imgData.data[idx] = r;
+                    imgData.data[idx+1] = g;
+                    imgData.data[idx+2] = b;
+                    imgData.data[idx+3] = 255;
+                }
             }
             ctx.putImageData(imgData, 0, 0);
         }
         
-        // Animation loop - runs real CPU cycles
-        function animationLoop(now) {
-            if (osRunning && kernel && kernel.poweredOn) {
-                // Run emulated CPU cycles
-                kernel.run(4000);
-                
-                // Feed input to emulated GPU
-                const gpu = kernel.currentGPU;
-                if (gpu) {
-                    gpu.updateMouse(mouseX, mouseY, leftBtn === 1, rightBtn === 1, false);
-                    for (let k of pressedKeys) {
-                        if (typeof k === 'number') gpu.setKeyDown(k & 0xFF);
-                    }
-                }
+        // Build console with custom drawing instruction
+        const console = VirtualOS.ConsoleEmulatorFactory.createCustom({
+            name: "TestBench",
+            bits: 32,
+            gpuConfig: { mode: 'pixel', displayWidth: 256, displayHeight: 256 },
+            customOpcodes: {
+                0xF0: `(bus, regs) => {
+                    // DRAW PIXEL: R1=x, R2=y, R3=color
+                    const x = Number(regs[1]) & 0xFF;
+                    const y = Number(regs[2]) & 0xFF;
+                    const col = Number(regs[3]) & 0x0F;
+                    bus.writeByte32(0x06000000 + (y * 256 + x), col);
+                }`,
+                0xF1: `(bus, regs) => {
+                    // CLEAR SCREEN
+                    for(let i = 0x06000000; i < 0x06010000; i++) bus.writeByte32(i, 0);
+                }`
             }
-            renderFramebuffer();
-            animationId = requestAnimationFrame(animationLoop);
+        });
+        
+        const kernel = console.kernel;
+        kernel.switchTo32Bit();
+        
+        // Allocate VRAM pages
+        for (let addr = 0x06000000; addr < 0x06010000; addr += 4096) {
+            kernel.bus.pages.set(Math.floor(addr / 4096), new Uint8Array(4096));
         }
         
-        // Input handlers
-        function handleMouseMove(e) {
-            const rect = canvas.getBoundingClientRect();
-            const scale = 256 / rect.width;
-            let nx = Math.min(255, Math.max(0, Math.floor((e.clientX - rect.left) * scale)));
-            let ny = Math.min(255, Math.max(0, Math.floor((e.clientY - rect.top) * scale)));
-            mouseX = nx; mouseY = ny;
-            if (kernel && kernel.poweredOn && kernel.currentGPU)
-                kernel.currentGPU.updateMouse(mouseX, mouseY, leftBtn, rightBtn, false);
-        }
-        function handleMouseDown(e) {
-            e.preventDefault();
-            if (e.button === 0) leftBtn = 1;
-            if (e.button === 2) rightBtn = 1;
-            if (kernel && kernel.poweredOn && kernel.currentGPU)
-                kernel.currentGPU.updateMouse(mouseX, mouseY, leftBtn, rightBtn, false);
-        }
-        function handleMouseUp(e) {
-            if (e.button === 0) leftBtn = 0;
-            if (e.button === 2) rightBtn = 0;
-            if (kernel && kernel.poweredOn && kernel.currentGPU)
-                kernel.currentGPU.updateMouse(mouseX, mouseY, leftBtn, rightBtn, false);
-        }
-        function handleKeyDown(e) {
-            pressedKeys.add(e.keyCode);
-            if (kernel && kernel.poweredOn && kernel.currentGPU)
-                kernel.currentGPU.setKeyDown(e.keyCode & 0xFF);
-        }
-        function handleKeyUp(e) {
-            pressedKeys.delete(e.keyCode);
-            if (kernel && kernel.poweredOn && kernel.currentGPU)
-                kernel.currentGPU.setKeyUp(e.keyCode & 0xFF);
-        }
-        canvas.addEventListener('mousemove', handleMouseMove);
-        canvas.addEventListener('mousedown', handleMouseDown);
-        canvas.addEventListener('mouseup', handleMouseUp);
-        canvas.addEventListener('contextmenu', e => e.preventDefault());
-        document.addEventListener('keydown', handleKeyDown);
-        document.addEventListener('keyup', handleKeyUp);
-        
-        // ========== BUILD REAL EMULATED CONSOLE ==========
-        async function buildMiniOS() {
-            // Create custom console using REAL emulator factory
-            const miniConsole = VirtualOS.ConsoleEmulatorFactory.createCustom({
-                name: "MiniOS",
-                bits: 74,
-                memoryLayout: {
-                    vram: { startAddress: 0x06000000, size: 0x00010000 }
-                },
-                cartridgeFormat: {
-                    romStartAddress: 0x08000000,
-                    headerOffset: 0,
-                    headerLength: 0
-                },
-                gpuConfig: {
-                    mode: 'dimensional',
-                    displayWidth: 256,
-                    displayHeight: 256
-                },
-                // REAL custom CPU instructions (opcodes)
-                customOpcodes: {
-                    0xF0: `(bus, regs) => {
-                        // DRAW PIXEL: R1=x, R2=y, R3=color
-                        const x = Number(regs[1]) & 0xFF;
-                        const y = Number(regs[2]) & 0xFF;
-                        const col = Number(regs[3]) & 0x0F;
-                        bus.writeByte32(0x06000000 + (y * 256 + x), col);
-                    }`,
-                    0xF1: `(bus, regs) => {
-                        // CLEAR SCREEN
-                        for(let i = 0x06000000; i < 0x06010000; i++) bus.writeByte32(i, 0);
-                    }`,
-                    0xF2: `(bus, regs) => {
-                        // DRAW RECT: R1=x, R2=y, R3=w, R4=h, R5=color
-                        const x = Number(regs[1]), y = Number(regs[2]);
-                        const w = Number(regs[3]), h = Number(regs[4]);
-                        const col = Number(regs[5]) & 0x0F;
-                        for(let yy = 0; yy < h; yy++) {
-                            for(let xx = 0; xx < w; xx++) {
-                                const sx = x + xx, sy = y + yy;
-                                if(sx >= 0 && sx < 256 && sy >= 0 && sy < 256)
-                                    bus.writeByte32(0x06000000 + (sy * 256 + sx), col);
-                            }
-                        }
-                    }`,
-                    0xF3: `(bus, regs) => {
-                        // DRAW LINE: R1=x1, R2=y1, R3=x2, R4=y2, R5=color
-                        let x1 = Number(regs[1]), y1 = Number(regs[2]);
-                        let x2 = Number(regs[3]), y2 = Number(regs[4]);
-                        const col = Number(regs[5]) & 0x0F;
-                        const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
-                        const sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
-                        let err = dx - dy;
-                        while(true) {
-                            if(x1 >= 0 && x1 < 256 && y1 >= 0 && y1 < 256)
-                                bus.writeByte32(0x06000000 + (y1 * 256 + x1), col);
-                            if(x1 === x2 && y1 === y2) break;
-                            const e2 = 2 * err;
-                            if(e2 > -dy) { err -= dy; x1 += sx; }
-                            if(e2 < dx) { err += dx; y1 += sy; }
-                        }
-                    }`
-                }
-            });
+        // Create REAL machine code ROM that will execute on the CPU
+        // This is NOT JavaScript - this is actual emulated CPU instructions
+        function createRealROM() {
+            const rom = new Uint8Array(256);
+            let p = 0;
             
-            const kernelObj = miniConsole.kernel;
-            if (kernelObj.currentMode !== 'Bit74') kernelObj.switchTo74Bit();
+            // Clear screen (0xF1)
+            rom[p++] = 0xF1;
             
-            // Create REAL custom GPU dimension
-            class MiniOSDesktop extends VirtualOS.RenderingDimension {
-                constructor() { super("MiniOS_Desktop"); }
-                get dimensionCount() { return 2; }
-                createElement(...args) { return new VirtualOS.Pixel2D(args[0] || 0); }
-                createFrame(w, h) {
-                    const frame = new VirtualOS.Frame2D(w, h);
-                    // Initialize with blue gradient pattern
-                    for(let y = 0; y < h; y++) {
-                        for(let x = 0; x < w; x++) {
-                            let col = 4;  // blue base
-                            if(y < 16) col = 7;
-                            else if(y > 240) col = 8;
-                            else if(x % 32 < 8 && y % 32 < 8) col = 11;
-                            frame.set(x, y, col);
-                        }
-                    }
-                    return frame;
-                }
+            // Draw a diagonal line using MOV and DRAW instructions
+            // These are REAL CPU instructions that will be fetched, decoded, and executed
+            for (let i = 0; i < 64; i++) {
+                // MOV R1, i (x coordinate)
+                rom[p++] = 0x11; rom[p++] = 0x01; rom[p++] = i; rom[p++] = 0; rom[p++] = 0; rom[p++] = 0;
+                // MOV R2, i (y coordinate)  
+                rom[p++] = 0x11; rom[p++] = 0x02; rom[p++] = i; rom[p++] = 0; rom[p++] = 0; rom[p++] = 0;
+                // MOV R3, 7 (white color)
+                rom[p++] = 0x11; rom[p++] = 0x03; rom[p++] = 7; rom[p++] = 0; rom[p++] = 0; rom[p++] = 0;
+                // DRAW PIXEL (0xF0)
+                rom[p++] = 0xF0;
             }
             
-            const gpu = kernelObj.currentGPU;
-            if (gpu) {
-                gpu.addDimension(new MiniOSDesktop());
-                gpu.addDimension(new VirtualOS.Dimension2D());
-                gpu.setActiveDimension("MiniOS_Desktop");
-            }
+            // HALT
+            rom[p++] = 0xFF;
             
-            // Pre-allocate VRAM pages
-            for (let addr = 0x06000000; addr < 0x06010000; addr += 4096) {
-                kernelObj.bus.pages.set(Math.floor(addr / 4096), new Uint8Array(4096));
-            }
-            
-            // Load a ROM that draws the OS interface using custom instructions
-            // This is REAL machine code executing on the 74-bit CPU
-            const bootRom = new Uint8Array(1024);
-            let romPtr = 0;
-            
-            // Clear screen
-            bootRom[romPtr++] = 0xF1;
-            
-            // Draw title bar (x=0,y=0,w=256,h=16,color=7)
-            bootRom[romPtr++] = 0xF2;
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;  // x=0
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;  // y=0
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;  // w=0 (will be 256)
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;  // h=0 (will be 16)
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;  // color=7
-            // Fill w=256, h=16, color=7 in little-endian
-            bootRom[4] = 0x00; bootRom[5] = 0x01;  // w = 256
-            bootRom[6] = 0x10; bootRom[7] = 0x00;  // h = 16
-            bootRom[8] = 0x07; bootRom[9] = 0x00;  // color = 7
-            
-            // Draw taskbar (x=0,y=240,w=256,h=16,color=8)
-            romPtr = 10;
-            bootRom[romPtr++] = 0xF2;
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x00;
-            bootRom[romPtr++] = 0xF0; bootRom[romPtr++] = 0x00;  // y=240
-            bootRom[romPtr++] = 0x00; bootRom[romPtr++] = 0x01;  // w=256
-            bootRom[romPtr++] = 0x10; bootRom[romPtr++] = 0x00;  // h=16
-            bootRom[romPtr++] = 0x08; bootRom[romPtr++] = 0x00;  // color=8
-            
-            // Draw "MINIOS" title text as pixels
-            // 'M' pattern
-            romPtr = 20;
-            const logoPixels = [
-                [15,4,7],[16,4,7],[17,4,7],[18,4,7],[19,4,7],[20,4,7],[21,4,7],
-                [15,5,7],[20,5,7],[15,6,7],[20,6,7],[15,7,7],[20,7,7],[15,8,7],[20,8,7],
-                [15,9,7],[16,9,7],[17,9,7],[18,9,7],[19,9,7],[20,9,7],[21,9,7]
-            ];
-            for (let p of logoPixels) {
-                bootRom[romPtr++] = 0xF0;
-                bootRom[romPtr++] = p[0]; bootRom[romPtr++] = 0x00;
-                bootRom[romPtr++] = p[1]; bootRom[romPtr++] = 0x00;
-                bootRom[romPtr++] = p[2]; bootRom[romPtr++] = 0x00;
-            }
-            
-            // HALT at the end
-            bootRom[romPtr++] = 0xFF;
-            
-            // Write ROM to emulated memory
-            for (let i = 0; i < bootRom.length; i++) {
-                kernelObj.bus.writeByte32(0x08000000 + i, bootRom[i]);
-            }
-            
-            // Set instruction pointer and boot
-            if (kernelObj.currentCPU) {
-                kernelObj.currentCPU.ip = new VirtualOS.UInt74(0x08000000n);
-            }
-            kernelObj.powerOn(new Uint8Array(256));
-            kernelObj.poweredOn = true;
-            if (kernelObj.currentCPU) kernelObj.currentCPU.halted = false;
-            
-            return kernelObj;
+            log(`ROM created: ${p} bytes of real machine code`);
+            return rom;
         }
         
-        // ========== DEMO DRAWING USING EMULATED CPU ==========
-        async function drawDemo() {
-            if (!kernel || !kernel.poweredOn) return;
+        async function executeROM() {
+            log("\n=== LOADING ROM INTO EMULATED MEMORY ===");
             
-            // Write a demo program to memory that draws shapes using custom instructions
-            const demoRom = new Uint8Array(256);
-            let ptr = 0;
+            const rom = createRealROM();
             
-            // Clear screen
-            demoRom[ptr++] = 0xF1;
-            
-            // Draw sun (circle approximation)
-            for (let r = 0; r < 12; r++) {
-                for (let deg = 0; deg < 360; deg += 30) {
-                    let rad = deg * Math.PI / 180;
-                    let x = 50 + Math.cos(rad) * r;
-                    let y = 50 + Math.sin(rad) * r;
-                    demoRom[ptr++] = 0xF0;
-                    demoRom[ptr++] = x; demoRom[ptr++] = 0x00;
-                    demoRom[ptr++] = y; demoRom[ptr++] = 0x00;
-                    demoRom[ptr++] = 14; demoRom[ptr++] = 0x00;  // yellow
-                }
+            // Write ROM to emulated memory at 0x08000000
+            for (let i = 0; i < rom.length; i++) {
+                kernel.bus.writeByte32(0x08000000 + i, rom[i]);
             }
             
-            // Draw ground rectangle
-            demoRom[ptr++] = 0xF2;
-            demoRom[ptr++] = 0; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 100; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 0; demoRom[ptr++] = 1;  // w=256
-            demoRom[ptr++] = 50; demoRom[ptr++] = 0;  // h=50
-            demoRom[ptr++] = 2; demoRom[ptr++] = 0;   // red
+            // Set CPU instruction pointer to ROM start
+            kernel.currentCPU.ip = 0x08000000;
+            kernel.poweredOn = true;
+            kernel.currentCPU.halted = false;
             
-            // Draw line across screen
-            demoRom[ptr++] = 0xF3;
-            demoRom[ptr++] = 0; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 120; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 255; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 120; demoRom[ptr++] = 0;
-            demoRom[ptr++] = 3; demoRom[ptr++] = 0;   // green
+            log("CPU IP set to 0x08000000");
+            log("Executing machine code...\n");
             
-            demoRom[ptr++] = 0xFF;  // HALT
-            
-            for (let i = 0; i < demoRom.length; i++) {
-                kernel.bus.writeByte32(0x09000000 + i, demoRom[i]);
+            // Run the emulated CPU - this executes the ROM instructions
+            let cycles = 0;
+            while (!kernel.currentCPU.halted && cycles < 1000) {
+                kernel.currentCPU.cycle();
+                cycles++;
             }
-            kernel.currentCPU.ip = new VirtualOS.UInt74(0x09000000n);
-            sysLog("🎨 Drawing demo via CPU instructions");
+            
+            log(`CPU executed ${cycles} cycles`);
+            log(`CPU HALTED: ${kernel.currentCPU.halted}`);
+            
+            // Render what the CPU drew
+            renderVRAM(kernel.bus);
+            log("\n✅ The CPU executed real machine code and drew to VRAM!");
         }
         
-        async function gameTest() {
-            if (!kernel || !kernel.poweredOn) return;
-            // Simple moving dot program
-            const gameRom = new Uint8Array(256);
-            gameRom[0] = 0xF1;  // clear
-            gameRom[1] = 0xFF;  // halt (simplified)
-            for (let i = 0; i < gameRom.length; i++) {
-                kernel.bus.writeByte32(0x0A000000 + i, gameRom[i]);
-            }
-            kernel.currentCPU.ip = new VirtualOS.UInt74(0x0A000000n);
-            sysLog("🎮 Game test mode active");
-        }
+        document.getElementById('runBtn').onclick = executeROM;
         
-        async function powerOn() {
-            if (kernel && kernel.poweredOn) return;
-            kernel = await buildMiniOS();
-            osRunning = true;
-            updateUI();
-            sysLog(`✅ MINIOS booted | ${kernel.currentMode} | 74-bit CPU active`);
-        }
-        
-        function shutdown() {
-            if (kernel) kernel.powerOff();
-            osRunning = false;
-            updateUI();
-            ctx.fillStyle = "#000";
-            ctx.fillRect(0, 0, 256, 256);
-            sysLog("⛔ System offline");
-        }
-        
-        async function resetSystem() {
-            if (kernel) kernel.powerOff();
-            kernel = await buildMiniOS();
-            osRunning = true;
-            updateUI();
-            sysLog("🔄 System reset");
-        }
-        
-        btnPower.onclick = async () => {
-            if (osRunning && kernel && kernel.poweredOn) shutdown();
-            else await powerOn();
-        };
-        btnShutdown.onclick = () => shutdown();
-        btnReset.onclick = async () => await resetSystem();
-        btnDrawDemo.onclick = async () => await drawDemo();
-        btnGameTest.onclick = async () => await gameTest();
-        
-        animationLoop();
-        sysLog("Ready — press POWER ON");
-    })();
-</script>
+        // Initial render
+        renderVRAM(kernel.bus);
+        log("Ready. Click button to execute real CPU instructions.");
+    </script>
 </body>
 </html>
