@@ -2,81 +2,322 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>VirtualOS 74-Bit Test</title>
+    <title>MiniOS - 74-Bit Operating System</title>
     <style>
         body { background:#0a0a0f; color:#c0c0d0; font-family:monospace; padding:20px; }
-        canvas { border:2px solid #444; image-rendering:pixelated; width:512px; height:512px; background:#000; cursor:none; }
+        canvas { border:2px solid #00ffaa; image-rendering:pixelated; width:512px; height:512px; background:#000; cursor:none; }
         .bar { background:#000; border:1px solid #333; padding:8px; margin-top:8px; font-size:11px; color:#00cc88; }
         button { padding:6px 14px; margin:4px; border:1px solid #00cc88; background:transparent; color:#00cc88; cursor:pointer; }
         button:disabled { opacity:0.3; }
     </style>
 </head>
 <body>
-    <div id="errLog" style="background:#300;color:#f44;font-size:9px;padding:4px;max-height:100px;overflow:auto;display:none;"></div>
-    <script>
-        window.onerror = function(msg, url, line, col, error) {
-            const el = document.getElementById('errLog');
-            el.style.display = 'block';
-            el.textContent += '❌ Line ' + line + ': ' + msg + '\n';
-        };
-    </script>
     <canvas id="screen" width="256" height="256"></canvas>
-    <div class="bar" id="log">[SYSTEM] Ready</div>
-    <button onclick="boot()">⚡ BOOT</button>
-    <button id="dimBtn" onclick="addDims()" disabled>➕ DIMS</button>
-    <button id="switchBtn" onclick="switchDim()" disabled>🔄 SWITCH</button>
-    <button id="offBtn" onclick="shutdown()" disabled>⏻ OFF</button>
-    <script src="VirtualOs.js"></script>
+    <div class="bar" id="log">[MINIOS] Ready</div>
+    <div>
+        <button id="btnPower">⚡ BOOT MINIOS</button>
+        <button id="dimBtn" disabled>➕ ADD DIMENSION</button>
+        <button id="switchBtn" disabled>🔄 SWITCH DIM</button>
+        <button id="offBtn" disabled>⏻ SHUTDOWN</button>
+    </div>
+
+    <script src="VirtualOS.js"></script>
     <script>
-        let os, booted, dims=[], W=256, H=256;
-        const c=document.getElementById('screen'), ctx=c.getContext('2d');
-        const PAL=[[0,0,0],[255,255,255],[255,60,60],[60,255,60],[60,60,255],[255,255,60],[255,60,255],[60,255,255],[255,140,30],[140,60,255],[60,140,255],[255,140,200],[100,60,30],[200,180,150],[255,215,0],[80,80,80]];
-        let mx=128,my=128,ml=0,mr=0,keys=new Set();
-        function log(s){ const el=document.getElementById('log'); el.textContent=s; console.log(s); }
-
-        const FONT={ 'A':[0x1E,0x21,0x21,0x3F,0x21,0x21],'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],'C':[0x1E,0x21,0x20,0x20,0x21,0x1E],'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F],'I':[0x1F,0x04,0x04,0x04,0x04,0x1F],'L':[0x20,0x20,0x20,0x20,0x20,0x3F],'M':[0x21,0x33,0x2D,0x21,0x21,0x21],'N':[0x21,0x31,0x29,0x25,0x23,0x21],'O':[0x1E,0x21,0x21,0x21,0x21,0x1E],'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E],'T':[0x3F,0x04,0x04,0x04,0x04,0x04],'U':[0x21,0x21,0x21,0x21,0x21,0x1E],'V':[0x21,0x21,0x21,0x21,0x12,0x0C],'W':[0x21,0x21,0x21,0x2D,0x33,0x21],'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],'Y':[0x21,0x12,0x0C,0x04,0x04,0x04],'0':[0x1E,0x23,0x25,0x29,0x31,0x1E],'1':[0x0C,0x14,0x04,0x04,0x04,0x1F],'2':[0x1E,0x21,0x02,0x0C,0x10,0x3F],'3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],'4':[0x22,0x22,0x22,0x3F,0x02,0x02],'5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],'6':[0x1E,0x20,0x3E,0x21,0x21,0x1E],'7':[0x3F,0x01,0x02,0x04,0x08,0x10],'8':[0x1E,0x21,0x1E,0x21,0x21,0x1E],'9':[0x1E,0x21,0x21,0x1F,0x01,0x1E],' ':[0,0,0,0,0,0],':':[0,0x06,0x06,0,0x06,0x06],'-':[0,0,0x3F,0,0,0],'|':[0x04,0x04,0x04,0x04,0x04,0x04],'[':[0x1E,0x10,0x10,0x10,0x10,0x1E],']':[0x3C,0x04,0x04,0x04,0x04,0x3C],'*':[0x14,0x08,0x3E,0x08,0x14,0],'/':[0x01,0x02,0x04,0x08,0x10,0x20] };
-        function drawText(img,text,x,y,color){ const chars=text.toUpperCase().split(''); for(let ci=0;ci<chars.length;ci++){ const glyph=FONT[chars[ci]]||FONT[' ']; for(let row=0;row<6;row++){ for(let px=0;px<6;px++){ if(glyph[row]&(1<<(5-px))){ const sx=x+ci*7+px,sy=y+row; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const[c1,c2,c3]=PAL[color%16]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } } } } } }
-
-        async function boot(){
-            os=new VirtualOS.Kernel74();
+        // ============================================================
+        // MINIOS - EXACT PATTERN FROM WORKING EXAMPLE
+        // Uses Kernel74, Dimension2D, and VRAM drawing
+        // ============================================================
+        
+        let os, booted, dims = [];
+        let W = 256, H = 256;
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const logDiv = document.getElementById('log');
+        
+        // 16-color palette (matches VirtualOS)
+        const PAL = [
+            [0,0,0],[255,255,255],[255,60,60],[60,255,60],
+            [60,60,255],[255,255,60],[255,60,255],[60,255,255],
+            [255,140,30],[140,60,255],[60,140,255],[255,140,200],
+            [100,60,30],[200,180,150],[255,215,0],[80,80,80]
+        ];
+        
+        // Font data (6x6 pixels)
+        const FONT = {
+            'A':[0x1E,0x21,0x21,0x3F,0x21,0x21], 'B':[0x3E,0x21,0x3E,0x21,0x21,0x3E],
+            'C':[0x1E,0x21,0x20,0x20,0x21,0x1E], 'D':[0x3C,0x22,0x21,0x21,0x22,0x3C],
+            'E':[0x3F,0x20,0x3E,0x20,0x20,0x3F], 'F':[0x3F,0x20,0x3E,0x20,0x20,0x20],
+            'G':[0x1E,0x21,0x20,0x27,0x21,0x1F], 'H':[0x21,0x21,0x3F,0x21,0x21,0x21],
+            'I':[0x1F,0x04,0x04,0x04,0x04,0x1F], 'J':[0x0F,0x02,0x02,0x02,0x22,0x1C],
+            'K':[0x21,0x22,0x3C,0x22,0x21,0x21], 'L':[0x20,0x20,0x20,0x20,0x20,0x3F],
+            'M':[0x21,0x33,0x2D,0x21,0x21,0x21], 'N':[0x21,0x31,0x29,0x25,0x23,0x21],
+            'O':[0x1E,0x21,0x21,0x21,0x21,0x1E], 'P':[0x3E,0x21,0x3E,0x20,0x20,0x20],
+            'Q':[0x1E,0x21,0x21,0x25,0x22,0x1D], 'R':[0x3E,0x21,0x3E,0x24,0x22,0x21],
+            'S':[0x1E,0x20,0x1E,0x01,0x01,0x3E], 'T':[0x3F,0x04,0x04,0x04,0x04,0x04],
+            'U':[0x21,0x21,0x21,0x21,0x21,0x1E], 'V':[0x21,0x21,0x21,0x21,0x12,0x0C],
+            'W':[0x21,0x21,0x21,0x2D,0x33,0x21], 'X':[0x21,0x12,0x0C,0x0C,0x12,0x21],
+            'Y':[0x21,0x12,0x0C,0x04,0x04,0x04], 'Z':[0x3F,0x02,0x04,0x08,0x10,0x3F],
+            '0':[0x1E,0x23,0x25,0x29,0x31,0x1E], '1':[0x0C,0x14,0x04,0x04,0x04,0x1F],
+            '2':[0x1E,0x21,0x02,0x0C,0x10,0x3F], '3':[0x3E,0x01,0x0E,0x01,0x01,0x3E],
+            '4':[0x22,0x22,0x22,0x3F,0x02,0x02], '5':[0x3F,0x20,0x3E,0x01,0x21,0x1E],
+            '6':[0x1E,0x20,0x3E,0x21,0x21,0x1E], '7':[0x3F,0x01,0x02,0x04,0x08,0x10],
+            '8':[0x1E,0x21,0x1E,0x21,0x21,0x1E], '9':[0x1E,0x21,0x1F,0x01,0x21,0x1E],
+            ' ':[0,0,0,0,0,0], ':':[0,0x06,0x06,0,0x06,0x06], '-':[0,0,0x3F,0,0,0],
+            '/':[0x01,0x02,0x04,0x08,0x10,0x20]
+        };
+        
+        function drawTextToVRAM(bus, text, x, y, color) {
+            const chars = text.toUpperCase().split('');
+            for (let ci = 0; ci < chars.length; ci++) {
+                const glyph = FONT[chars[ci]] || FONT[' '];
+                for (let row = 0; row < 6; row++) {
+                    for (let px = 0; px < 6; px++) {
+                        if (glyph[row] & (1 << (5 - px))) {
+                            const sx = x + ci * 7 + px;
+                            const sy = y + row;
+                            if (sx >= 0 && sx < W && sy >= 0 && sy < H) {
+                                const addr = 0x06000000 + (sy * W + sx);
+                                bus.writeByte32(addr, color);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        function log(msg) { 
+            logDiv.textContent = msg; 
+            console.log(msg); 
+        }
+        
+        // ============================================================
+        // DRAW MINIOS DESKTOP TO VRAM
+        // ============================================================
+        function drawDesktop() {
+            if (!os || !os.bus) return;
+            const bus = os.bus;
+            
+            // Clear screen
+            for (let addr = 0x06000000; addr < 0x06010000; addr++) {
+                bus.writeByte32(addr, 0);
+            }
+            
+            // Draw title bar (top 16px)
+            for (let y = 0; y < 16; y++) {
+                for (let x = 0; x < W; x++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 7);  // Cyan
+                }
+            }
+            
+            // Draw taskbar (bottom 16px)
+            for (let y = H - 16; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    const addr = 0x06000000 + (y * W + x);
+                    bus.writeByte32(addr, 8);  // Orange
+                }
+            }
+            
+            // Draw desktop pattern
+            for (let y = 16; y < H - 16; y++) {
+                for (let x = 0; x < W; x++) {
+                    if ((x + y) % 32 < 16) {
+                        const addr = 0x06000000 + (y * W + x);
+                        bus.writeByte32(addr, 4);  // Blue
+                    }
+                }
+            }
+            
+            // Draw text using VRAM
+            drawTextToVRAM(bus, "MINIOS 74-BIT", 8, 4, 15);
+            drawTextToVRAM(bus, "DESKTOP READY", 8, 14, 3);
+            drawTextToVRAM(bus, "Mode: " + os.currentMode, 8, 24, 5);
+            drawTextToVRAM(bus, "Dims: " + (dims.join(',') || '2D'), 8, 34, 5);
+            
+            // Draw app icons
+            // Calculator icon
+            for (let i = 0; i < 12; i++) {
+                for (let j = 0; j < 12; j++) {
+                    const addr = 0x06000000 + ((50 + j) * W + (10 + i));
+                    bus.writeByte32(addr, 11);  // Purple
+                }
+            }
+            drawTextToVRAM(bus, "CALC", 10, 70, 15);
+            
+            // Game icon
+            for (let i = 0; i < 12; i++) {
+                for (let j = 0; j < 12; j++) {
+                    const addr = 0x06000000 + ((50 + j) * W + (80 + i));
+                    bus.writeByte32(addr, 10);  // Green
+                }
+            }
+            drawTextToVRAM(bus, "GAMES", 80, 70, 15);
+            
+            // Settings icon
+            for (let i = 0; i < 12; i++) {
+                for (let j = 0; j < 12; j++) {
+                    const addr = 0x06000000 + ((50 + j) * W + (150 + i));
+                    bus.writeByte32(addr, 9);   // Yellow
+                }
+            }
+            drawTextToVRAM(bus, "SETUP", 150, 70, 15);
+            
+            log("✓ Desktop drawn to VRAM");
+        }
+        
+        // ============================================================
+        // ANIMATION LOOP - SAME AS WORKING EXAMPLE
+        // ============================================================
+        let fc = 0, ft = performance.now(), fps = 0;
+        let mx = 128, my = 128, ml = 0, mr = 0, keys = new Set();
+        
+        function loop(ts) {
+            if (!booted || !os) return requestAnimationFrame(loop);
+            
+            const gpu = os.currentGPU;
+            const fb = gpu.getFramebuffer();
+            
+            if (fb && fb.length === 65536) {
+                const img = ctx.createImageData(W, H);
+                for (let i = 0; i < 65536; i++) {
+                    const col = fb[i] & 0x0F;
+                    const [r, g, b] = PAL[col];
+                    const idx = i * 4;
+                    img.data[idx] = r;
+                    img.data[idx+1] = g;
+                    img.data[idx+2] = b;
+                    img.data[idx+3] = 255;
+                }
+                ctx.putImageData(img, 0, 0);
+            }
+            
+            fc++;
+            if (ts - ft >= 1000) {
+                fps = fc;
+                fc = 0;
+                ft = ts;
+            }
+            
+            log(`FPS:${fps} Frame:${gpu.frameCount} Mode:${os.currentMode} GPU:${gpu.activeDim} Mouse:${mx},${my} RAM:${Math.floor((os.bus?.usedRam||0)/1024)}KB`);
+            
+            requestAnimationFrame(loop);
+        }
+        
+        // ============================================================
+        // BOOT MINIOS - EXACT PATTERN FROM WORKING EXAMPLE
+        // ============================================================
+        async function boot() {
+            log("Booting MiniOS...");
+            
+            os = new VirtualOS.Kernel74();
             await os.loadConfig('VOS.config.js');
             os.switchTo74Bit();
-            const g=os.currentGPU;
-            g.addDimension(new VirtualOS.Dimension2D());
-            g.addDimension(new VirtualOS.MixelDimension());
-            g.setActiveDimension('2D'); dims=g.getAvailableDimensions();
+            
+            const gpu = os.currentGPU;
+            gpu.addDimension(new VirtualOS.Dimension2D());
+            gpu.addDimension(new VirtualOS.MixelDimension());
+            gpu.setActiveDimension('2D');
+            dims = gpu.getAvailableDimensions();
+            
+            // Pre-allocate VRAM pages
+            for (let addr = 0x06000000; addr < 0x06010000; addr += 4096) {
+                os.bus.pages.set(Math.floor(addr / 4096), new Uint8Array(4096));
+            }
+            
             os.powerOn(new Uint8Array(256));
-            booted=true;
-            document.querySelectorAll('button').forEach(b=>b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'?b.disabled=true:b.disabled=false);
-            log('BOOTED - Mode:'+os.currentMode+' Dims:'+dims.join(','));
-            requestAnimationFrame(loop);
+            booted = true;
+            
+            // Draw desktop after boot
+            setTimeout(() => drawDesktop(), 100);
+            
+            document.querySelectorAll('button').forEach(btn => {
+                if (btn.id !== 'btnPower' && btn.id !== 'offBtn') {
+                    btn.disabled = false;
+                }
+            });
+            
+            log(`✅ MINIOS BOOTED | Mode:${os.currentMode} | Dims:${dims.join(',')}`);
         }
-        function shutdown(){ os.powerOff(); os=null; booted=false; ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H); log('OFF'); document.querySelectorAll('button').forEach(b=>b.disabled=b.id!=='dimBtn'&&b.id!=='switchBtn'&&b.id!=='offBtn'); }
-        function addDims(){ if(!os)return; const g=os.currentGPU; if(!dims.includes('MixelSpace')) g.addDimension(new VirtualOS.MixelDimension()); dims=g.getAvailableDimensions(); log('Dims:'+dims.join(',')); }
-        function switchDim(){ if(!os)return; const g=os.currentGPU; g.setActiveDimension(dims.find(d=>d!==g.activeDim)||dims[0]); log('Active:'+g.activeDim); }
-
-        let fc=0,ft=performance.now(),fps=0;
-        function loop(ts){
-            if(!booted||!os) return requestAnimationFrame(loop);
-            const g=os.currentGPU, img=ctx.createImageData(W,H);
-            for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const p=(y*W+x)*4; const bg=y<20?1:y>H-20?2:0; const[c1,c2,c3]=PAL[bg]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; img.data[p+3]=255; }
-            drawText(img,'VirtualOS 74-Bit',8,4,7);
-            drawText(img,'Desktop Ready',8,14,3);
-            drawText(img,'Mode:'+os.currentMode,8,24,5);
-            drawText(img,'Dims:'+(dims.join(',')||'none'),8,34,5);
-            const cur=[[1,0,0,0,0,0,0,0],[1,1,0,0,0,0,0,0],[1,2,1,0,0,0,0,0],[1,2,2,1,0,0,0,0],[1,2,2,2,1,0,0,0],[1,2,2,2,2,1,0,0],[1,2,2,2,2,2,1,0],[1,2,2,2,2,2,2,1],[1,2,2,2,2,2,1,0],[0,1,2,2,1,2,1,0],[0,0,1,1,0,0,1,1],[0,0,0,0,0,0,0,1]];
-            for(let y=0;y<cur.length;y++) for(let x=0;x<cur[y].length;x++){ const v=cur[y][x]; if(!v)continue; const sx=mx+x,sy=my+y; if(sx>=0&&sx<W&&sy>=0&&sy<H){ const p=(sy*W+sx)*4; const cl=v===1?15:0; const[c1,c2,c3]=PAL[cl]; img.data[p]=c1; img.data[p+1]=c2; img.data[p+2]=c3; } }
-            ctx.putImageData(img,0,0);
-            fc++; if(ts-ft>=1000){ fps=fc; fc=0; ft=ts; }
-            log(`FPS:${fps} Frame:${g.frameCount} Mode:${os.currentMode} GPU:${g.activeDim} Mouse:${mx},${my} RAM:${Math.floor((os.bus?.usedRam||0)/1024)}KB`);
-            requestAnimationFrame(loop);
+        
+        function shutdown() {
+            if (os) os.powerOff();
+            booted = false;
+            os = null;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, W, H);
+            log('⛔ MINIOS SHUTDOWN');
+            document.querySelectorAll('button').forEach(btn => {
+                if (btn.id !== 'btnPower') btn.disabled = true;
+            });
         }
-        c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect(); mx=Math.floor((e.clientX-r.left)/2); my=Math.floor((e.clientY-r.top)/2); if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
-        c.addEventListener('mousedown',e=>{ e.preventDefault(); if(e.button===0)ml=1; if(e.button===2)mr=1; if(booted&&os?.currentGPU) os.currentGPU.updateMouse(mx,my,ml,mr,false); });
-        c.addEventListener('mouseup',e=>{ if(e.button===0)ml=0; if(e.button===2)mr=0; });
-        c.addEventListener('contextmenu',e=>e.preventDefault());
-        document.addEventListener('keydown',e=>{ if(keys.has(e.code))return; keys.add(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode&0xFF); });
-        document.addEventListener('keyup',e=>{ keys.delete(e.code); if(booted&&os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode&0xFF); });
+        
+        function addDims() {
+            if (!os) return;
+            const gpu = os.currentGPU;
+            if (!dims.includes('MixelSpace')) {
+                gpu.addDimension(new VirtualOS.MixelDimension());
+            }
+            dims = gpu.getAvailableDimensions();
+            log('Dims:' + dims.join(','));
+            drawDesktop();
+        }
+        
+        function switchDim() {
+            if (!os) return;
+            const gpu = os.currentGPU;
+            const newDim = dims.find(d => d !== gpu.activeDim) || dims[0];
+            gpu.setActiveDimension(newDim);
+            log('Active:' + gpu.activeDim);
+        }
+        
+        // ============================================================
+        // MOUSE AND KEYBOARD INPUT (SAME AS WORKING EXAMPLE)
+        // ============================================================
+        const canvasEl = document.getElementById('screen');
+        
+        canvasEl.addEventListener('mousemove', e => {
+            const rect = canvasEl.getBoundingClientRect();
+            mx = Math.floor((e.clientX - rect.left) / 2);
+            my = Math.floor((e.clientY - rect.top) / 2);
+            if (booted && os?.currentGPU) os.currentGPU.updateMouse(mx, my, ml, mr, false);
+        });
+        
+        canvasEl.addEventListener('mousedown', e => {
+            e.preventDefault();
+            if (e.button === 0) ml = 1;
+            if (e.button === 2) mr = 1;
+            if (booted && os?.currentGPU) os.currentGPU.updateMouse(mx, my, ml, mr, false);
+        });
+        
+        canvasEl.addEventListener('mouseup', e => {
+            if (e.button === 0) ml = 0;
+            if (e.button === 2) mr = 0;
+        });
+        
+        canvasEl.addEventListener('contextmenu', e => e.preventDefault());
+        
+        document.addEventListener('keydown', e => {
+            if (keys.has(e.code)) return;
+            keys.add(e.code);
+            if (booted && os?.currentGPU) os.currentGPU.setKeyDown(e.keyCode & 0xFF);
+        });
+        
+        document.addEventListener('keyup', e => {
+            keys.delete(e.code);
+            if (booted && os?.currentGPU) os.currentGPU.setKeyUp(e.keyCode & 0xFF);
+        });
+        
+        // ============================================================
+        // BUTTON HANDLERS
+        // ============================================================
+        document.getElementById('btnPower').onclick = boot;
+        document.getElementById('dimBtn').onclick = addDims;
+        document.getElementById('switchBtn').onclick = switchDim;
+        document.getElementById('offBtn').onclick = shutdown;
+        
+        // Start animation loop
+        requestAnimationFrame(loop);
+        log("MINIOS Ready. Press BOOT MINIOS to start.");
     </script>
 </body>
 </html>
