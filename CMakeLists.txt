@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.20)
+project(VOS LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_executable(vos
+  src/main.cpp src/lexer.cpp src/parser.cpp src/semantic.cpp src/ir.cpp src/backend.cpp src/container.cpp
+)
+target_include_directories(vos PRIVATE include)
+if(MSVC)
+  target_compile_options(vos PRIVATE /W4 /EHsc)
+else()
+  target_compile_options(vos PRIVATE -Wall -Wextra -Wpedantic -O2)
+endif()
+install(TARGETS vos RUNTIME DESTINATION bin)

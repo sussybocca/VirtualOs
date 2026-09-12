@@ -1,0 +1,375 @@
+@vos 1.0;
+@domain kernel;
+
+unit os::vir::kernel
+{
+    identity {
+        name = "VIR Browser Demo";
+        version = 1.0.0;
+        architecture = vos74;
+        abi = vosabi::1;
+    }
+
+    compile {
+        safety = strict;
+        bounds = checked;
+        overflow = trap;
+        nullability = forbidden;
+        optimization = aggressive;
+    }
+}
+
+import vos::core;
+import vos::memory;
+import vos::interrupts;
+import vos::hardware;
+import vos::display;
+import vos::graphics;
+import vos::input;
+import vos::filesystem;
+import vos::terminal;
+import vos::compositor;
+import vos::desktop;
+
+hardware machine VIRMachine
+{
+    architecture V74;
+
+    cpu BSP {
+        isa = V74;
+        clock = 3.20GHz;
+        registers = 32;
+        pipeline = superscalar<4>;
+        dispatch = 6;
+        retire = 6;
+    }
+
+    memory PhysicalRAM {
+        capacity = 4GiB;
+        page = 4KiB;
+        endian = little;
+    }
+
+    gpu PrimaryGPU {
+        architecture = VGPU2;
+        vram = 256MiB;
+        queues = 4;
+        displays = 2;
+    }
+}
+
+memoryspace system : physical<74>
+{
+    region InterruptVectors
+        @ 0x0000_0000
+        size 16KiB
+        permissions rw-
+        cache uncached
+        alignment 4096;
+
+    region KernelCode
+        @ 0x0010_0000
+        size 16MiB
+        permissions r-x
+        cache readonly
+        alignment 4096;
+
+    region KernelHeap
+        @ 0x0200_0000
+        size 256MiB
+        permissions rw-
+        cache writeback
+        alignment 4096;
+
+    region FrameBuffer
+        @ 0x2000_0000
+        size 32MiB
+        permissions rw-
+        cache writecombine
+        alignment 4096
+        mapping device::SystemDisplay;
+
+    region UserSpace
+        @ 0x3000_0000
+        size 256MiB
+        permissions rw-
+        cache writeback
+        alignment 4096;
+}
+
+device SystemDisplay
+{
+    mmio REGISTERS @ 0xF000_0000 size 64KiB
+    {
+        register CONTROL : u32 @ +0x0000 access rw reset 0;
+        register STATUS : u32 @ +0x0004 access ro volatile reset 0;
+        register WIDTH : u32 @ +0x0008 access rw reset 1280;
+        register HEIGHT : u32 @ +0x000C access rw reset 720;
+        register FRAME_ADDR : u74 @ +0x0010 access rw reset 0;
+        register PRESENT : u32 @ +0x0020 access wo;
+        register VSYNC_MODE : u32 @ +0x0024 access rw reset 1;
+        register FRAME_COUNTER : u32 @ +0x0028 access ro volatile reset 0;
+    }
+}
+
+device InputHub
+{
+    mmio REGS @ 0xF001_0000 size 4KiB
+    {
+        register ENABLED : u32 @ +0x0000 access rw reset 0;
+        register POINTER_X : u32 @ +0x0004 access ro volatile reset 0;
+        register POINTER_Y : u32 @ +0x0008 access ro volatile reset 0;
+        register BUTTONS : u32 @ +0x000C access ro volatile reset 0;
+        register KEYCODE : u32 @ +0x0010 access ro volatile reset 0;
+        register EVENTS : u32 @ +0x0014 access ro volatile reset 0;
+        register IRQ_ACK : u32 @ +0x0018 access wo;
+    }
+}
+
+device TickTimer
+{
+    mmio REGS @ 0xF002_0000 size 4KiB
+    {
+        register COUNTER : u32 @ +0x0000 access rw reset 0;
+        register PERIOD : u32 @ +0x0004 access rw reset 16;
+    }
+}
+
+device StorageController
+{
+    mmio REGS @ 0xF003_0000 size 4KiB
+    {
+        register CONTROL : u32 @ +0x0000 access rw reset 0;
+        register STATUS : u32 @ +0x0004 access ro volatile reset 1;
+        register SECTOR_SIZE : u32 @ +0x0008 access ro reset 512;
+    }
+}
+
+shared atomic<u64> ticks := 0;
+channel<u32,4096> renderQueue;
+
+pure proc add32(a: u32, b: u32) -> u32
+{
+    return a + b;
+}
+
+pure proc mix32(a: u32, b: u32) -> u32
+{
+    return (a * 33u32) ^ b;
+}
+
+proc initialize_display() -> void
+effects {
+    mmio.write;
+}
+contract {
+    requires true;
+}
+{
+    SystemDisplay.WIDTH <- 1280u32;
+    SystemDisplay.HEIGHT <- 720u32;
+    SystemDisplay.FRAME_ADDR <- 0x2000_0000u74;
+    SystemDisplay.VSYNC_MODE <- 1u32;
+    SystemDisplay.CONTROL <- 0x01u32;
+    graphics.configure(1280u32, 720u32, 0x2000_0000u74);
+}
+
+proc draw_boot_graphics() -> void
+effects {
+    mmio.write;
+}
+{
+    graphics.gradientRect(0u32, 0u32, 1280u32, 720u32, 0x030711FFu32, 0x0B1C35FFu32, true);
+    graphics.circle(640u32, 290u32, 64u32, 0x69B7FFFFu32, true);
+    graphics.circle(664u32, 273u32, 54u32, 0x071327FFu32, true);
+    graphics.text(530u32, 382u32, "VIR", 0xEAF5FFFFu32, 5u32);
+    graphics.text(516u32, 438u32, "VOS 1.0 / V74 KERNEL", 0x7FB7DFFFu32, 2u32);
+    graphics.flush();
+    SystemDisplay.PRESENT <- 1u32;
+}
+
+proc initialize_filesystem() -> void
+{
+    filesystem.seedVIR();
+    filesystem.mkdir("/home/user/Documents");
+    filesystem.mkdir("/home/user/Projects");
+    filesystem.writeText("/home/user/Documents/welcome.txt", "VIR is running from a compiled VOS image. Open Terminal and type HELP.");
+    filesystem.writeText("/home/user/Projects/kernel.vos", "This project was booted by the VIR V74 kernel.");
+    filesystem.writeText("/system/boot.log", "Display initialized. InputHub online. Compositor online. Desktop process scheduled.");
+}
+
+proc configure_desktop() -> void
+{
+    desktop.setBrand("VIR");
+    desktop.setWallpaper(0x071327FFu32, 0x173A5FFFu32);
+    desktop.registerApp("welcome", "Welcome", "welcome", "N");
+    desktop.registerApp("terminal", "Terminal", "terminal", ">_");
+    desktop.registerApp("files", "Files", "files", "[]");
+    desktop.registerApp("system", "System Monitor", "system", "CPU");
+    desktop.registerApp("settings", "Settings", "settings", "*");
+    terminal.configure("VIR Terminal", "/home/user");
+}
+
+proc kernel_main(boot: u32) -> u32
+effects {
+    mmio.write;
+}
+contract {
+    requires boot == boot;
+}
+{
+    initialize_display();
+    draw_boot_graphics();
+    initialize_filesystem();
+    configure_desktop();
+    drivers.attach("AuroraDisplay", "SystemDisplay");
+    drivers.attach("VIRInput", "InputHub");
+    scheduler.startTask("renderer");
+    scheduler.launchProcess("KernelConsole", 0u32);
+    scheduler.launchProcess("Desktop", 0u32);
+    return add32(20u32, 22u32);
+}
+
+interrupt TIMER
+    vector 0x20
+    priority 15
+    gate interrupt
+    stack kernel
+    preserves { r0 r1 r2 r3 }
+{
+    TickTimer.COUNTER <- 0u32;
+}
+
+interrupt INPUT
+    vector 0x21
+    priority 14
+    gate interrupt
+    stack kernel
+    preserves { r0 r1 r2 r3 }
+{
+    InputHub.IRQ_ACK <- 1u32;
+}
+
+process Desktop
+{
+    privilege user;
+    address_space isolated;
+
+    capability {
+        display;
+        keyboard;
+        mouse;
+        filesystem.read("/system");
+        filesystem.rw("/home");
+    }
+
+    entry main(argc: u32) -> i32
+    {
+        desktop.launch(850u32);
+        return 0;
+    }
+}
+
+process KernelConsole
+{
+    privilege kernel;
+    address_space shared;
+
+    capability {
+        display;
+        keyboard;
+        filesystem.read("/");
+    }
+
+    entry main(argc: u32) -> i32
+    {
+        terminal.print("Kernel console process online.");
+        return 0;
+    }
+}
+
+driver AuroraDisplay for device<SystemDisplay>
+{
+    state {
+        framebuffer: addr<phys,74>;
+        width: u32;
+        height: u32;
+    }
+
+    attach(device) -> void
+    {
+        device.FRAME_ADDR <- 0x2000_0000u74;
+        device.WIDTH <- 1280u32;
+        device.HEIGHT <- 720u32;
+        device.VSYNC_MODE <- 1u32;
+        device.CONTROL <- 1u32;
+    }
+
+    detach()
+    {
+        device.CONTROL <- 0u32;
+    }
+}
+
+driver VIRInput for device<InputHub>
+{
+    state {
+        enabled: u32;
+    }
+
+    attach(device) -> void
+    {
+        device.ENABLED <- 1u32;
+    }
+
+    detach()
+    {
+        device.ENABLED <- 0u32;
+    }
+}
+
+task renderer
+    affinity core[1]
+    priority realtime<4>
+{
+    loop {
+        when renderQueue <- command {
+            TickTimer.COUNTER <- command;
+            graphics.commit();
+        }
+    }
+}
+
+state MachineState
+{
+    Reset;
+    Booting;
+    Running;
+    Suspended;
+    Fault(code: u32);
+}
+
+machine NVMeController
+{
+    state RESET;
+    state READY;
+    state EXECUTING;
+    state FAULT;
+
+    RESET --[ command::initialize ]--> READY {
+        StorageController.CONTROL <- 1u32;
+    }
+
+    READY --[ command::submit ]--> EXECUTING {
+        TickTimer.COUNTER <- 1u32;
+    }
+
+    EXECUTING --[ dma::complete ]--> READY {
+        TickTimer.COUNTER <- 2u32;
+    }
+}
+
+target(browser)
+{
+    import platform::web::canvas;
+}

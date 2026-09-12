@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>VOS Browser Demo Compiler</title>
+<style>
+:root{color-scheme:dark;--bg:#070b13;--panel:#0d1524;--panel2:#111d31;--line:#263b59;--text:#e9f4ff;--muted:#8fa8c3;--cyan:#73d7ff;--green:#7ff0b0;--orange:#ffcb74;--red:#ff8191}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% 0,#132c48 0,#070b13 45%);font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--text);min-height:100vh}.top{height:58px;border-bottom:1px solid var(--line);background:#08111ee8;display:flex;align-items:center;padding:0 18px;gap:14px;position:sticky;top:0;z-index:5;backdrop-filter:blur(12px)}.brand{font-weight:800;letter-spacing:.12em;font-size:16px}.pill{border:1px solid #28526f;background:#102940;border-radius:999px;padding:4px 9px;color:var(--cyan);font-size:11px}.spacer{flex:1}button{border:1px solid #355d7e;background:#143452;color:#eaf7ff;padding:9px 13px;border-radius:8px;font:inherit;cursor:pointer}button:hover{background:#1b456c}button.primary{background:#17618b;border-color:#2385ba}button.good{background:#176242;border-color:#25875d}.layout{display:grid;grid-template-columns:minmax(430px,1fr) minmax(520px,1.18fr);gap:12px;padding:12px;height:calc(100vh - 58px)}.panel{border:1px solid var(--line);background:linear-gradient(180deg,#0d1727f2,#09111df2);border-radius:12px;overflow:hidden;min-height:0;box-shadow:0 12px 40px #0005}.left{display:grid;grid-template-rows:auto minmax(0,1fr) 220px}.right{display:grid;grid-template-rows:auto minmax(0,1fr) 210px}.bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#101c2e;border-bottom:1px solid var(--line)}.bar strong{font-size:12px;letter-spacing:.08em}.bar .minor{color:var(--muted);font-size:11px}textarea{resize:none;width:100%;height:100%;border:0;outline:0;background:#050a12;color:#d8ebff;padding:15px;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:4}pre{margin:0;white-space:pre-wrap;word-break:break-word;padding:12px;overflow:auto;height:100%;background:#07101b;color:#b9cee3}.console{border-top:1px solid var(--line);min-height:0}.screenwrap{display:flex;align-items:center;justify-content:center;min-height:0;background:repeating-conic-gradient(#0a1019 0 25%,#0c1420 0 50%) 0/20px 20px;padding:12px;overflow:auto}canvas{width:min(100%,1280px);height:auto;aspect-ratio:16/9;background:#000;border:1px solid #365876;box-shadow:0 0 0 1px #000,0 20px 60px #000a;image-rendering:pixelated}.bottom{display:grid;grid-template-columns:1.1fr .9fr;min-height:0;border-top:1px solid var(--line)}.box{min-height:0;overflow:auto;padding:12px}.box+.box{border-left:1px solid var(--line)}.box h3{font-size:11px;letter-spacing:.1em;margin:0 0 8px;color:var(--muted)}.diag{padding:6px 8px;border-radius:6px;margin:4px 0;background:#151d2a}.diag.error{border-left:3px solid var(--red)}.diag.warning{border-left:3px solid var(--orange)}.diag.info{border-left:3px solid var(--cyan)}.artifact{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #1e3048;padding:5px 0;color:#dcecff}.artifact button{padding:3px 7px;font-size:11px}.stats{display:flex;gap:14px;color:var(--muted);font-size:11px}.ok{color:var(--green)}.bad{color:var(--red)}.lock{color:var(--orange)}
+@media(max-width:1050px){.layout{grid-template-columns:1fr;height:auto}.panel{min-height:650px}.right{min-height:760px}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">VOS // BROWSER COMPILER</div>
+  <span class="pill">DEMO PROFILE · ~70%</span>
+  <span class="pill">VOS ABI 1</span>
+  <div class="spacer"></div>
+  <button id="load">Reload VIR Demo</button>
+  <button id="build" class="primary">Compile</button>
+  <button id="boot" class="good">Compile + Boot</button>
+</header>
+<main class="layout">
+  <section class="panel left">
+    <div class="bar"><strong>VIR-browser.vos</strong><span class="minor">Same VOS syntax · Browser Demo capability profile</span><div class="spacer"></div><span id="sourceStat" class="minor"></span></div>
+    <textarea id="source" spellcheck="false"></textarea>
+    <div class="console"><div class="bar"><strong>COMPILER OUTPUT</strong><div class="spacer"></div><span id="compileStat" class="minor"></span></div><pre id="log">Loading browser compiler…</pre></div>
+  </section>
+  <section class="panel right">
+    <div class="bar"><strong>VOS MACHINE</strong><span class="minor">Guest framebuffer · MMIO-controlled PRESENT/vsync</span><div class="spacer"></div><span id="runtimeStat" class="minor"></span></div>
+    <div class="screenwrap"><canvas id="screen" width="1280" height="720"></canvas></div>
+    <div class="bottom">
+      <div class="box"><h3>DIAGNOSTICS / CAPABILITY PROFILE</h3><div id="diagnostics"></div></div>
+      <div class="box"><h3>BUILD ARTIFACTS</h3><div id="artifacts"></div></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { VOS, BROWSER_DEMO_PROFILE } from './vos.js';
+
+const $=id=>document.getElementById(id), source=$('source'), log=$('log'), diagnostics=$('diagnostics'), artifacts=$('artifacts'), canvas=$('screen');
+let currentBuild=null, currentRuntime=null;
+
+function fmt(n){if(n<1024)return `${n} B`;if(n<1024*1024)return `${(n/1024).toFixed(1)} KiB`;return `${(n/1024/1024).toFixed(2)} MiB`;}
+function write(msg){log.textContent += (log.textContent?'\n':'')+msg;log.scrollTop=log.scrollHeight;}
+function showProfile(){diagnostics.innerHTML=`<div class="diag info"><b>Browser Demo:</b> ${BROWSER_DEMO_PROFILE.approximateFeatureCoverage}% feature profile. Runtime quality/performance features remain enabled.</div><div class="diag info"><b>Enabled:</b> ${BROWSER_DEMO_PROFILE.enabled.join(', ')}</div><div class="diag warning"><b>Native-only 30%:</b> ${BROWSER_DEMO_PROFILE.nativeOnly.join(', ')}</div>`;}
+function showDiagnostics(ds=[]){showProfile();for(const d of ds){const el=document.createElement('div');el.className='diag '+d.level;el.textContent=`${d.file}:${d.line}:${d.column} ${d.level.toUpperCase()}[${d.code}] ${d.message}`;diagnostics.appendChild(el);}}
+function showArtifacts(build){artifacts.innerHTML='';if(!build?.success)return;for(const name of build.listArtifacts()){const row=document.createElement('div');row.className='artifact';const data=build.bytes(name);row.innerHTML=`<span>${name}<br><small>${fmt(data.byteLength)}</small></span>`;const b=document.createElement('button');b.textContent='Download';b.onclick=()=>build.download(name);row.appendChild(b);artifacts.appendChild(row);}}
+async function loadDemo(){source.value=await (await fetch('../examples/VIR-browser.vos',{cache:'no-store'})).text();$('sourceStat').textContent=`${source.value.split('\n').length} lines`;log.textContent='Browser compiler ready. Edit VOS source, then Compile or Compile + Boot.';showProfile();}
+async function compile(){log.textContent='';write('VOS Browser Compiler 0.3');write('Profile: browser-demo (~70% of full native VOS)');const t=performance.now();currentBuild=await VOS.compile(source.value,{file:'VIR-browser.vos',name:'VIR-browser'});const ms=performance.now()-t;showDiagnostics(currentBuild.diagnostics);showArtifacts(currentBuild);$('compileStat').innerHTML=currentBuild.success?`<span class="ok">SUCCESS</span> · ${ms.toFixed(1)} ms`:`<span class="bad">FAILED</span> · ${ms.toFixed(1)} ms`;if(currentBuild.success){write(`Compiled successfully in ${ms.toFixed(1)} ms`);write(`Functions: ${currentBuild.manifest.functions.length}`);write(`Devices: ${currentBuild.manifest.hardware.devices.length}`);write(`Regions: ${currentBuild.manifest.hardware.regions.length}`);write(`WASM: ${currentBuild.wasm.byteLength} bytes`);write(`Artifacts: ${currentBuild.listArtifacts().length}`);}else for(const d of currentBuild.diagnostics)write(`${d.level}[${d.code}] ${d.message}`);return currentBuild;}
+async function boot(){const b=await compile();if(!b.success)return;if(currentRuntime?.desktop?.shutdown)currentRuntime.desktop.shutdown();const t=performance.now();currentRuntime=await VOS.boot(b,{canvas,entry:'kernel_main',args:[0],runtimeOptions:{shared:true,hotMemoryMB:256}});currentRuntime.display.present();canvas.focus();const ms=performance.now()-t;$('runtimeStat').innerHTML=`<span class="ok">RUNNING</span> · boot ${ms.toFixed(1)} ms`;write(`Booted kernel_main; desktop=${currentRuntime.desktop.running}; processes=${currentRuntime.scheduler.processes.size}; drivers=${currentRuntime.drivers.size}`);}
+
+$('load').onclick=loadDemo;$('build').onclick=compile;$('boot').onclick=boot;source.addEventListener('input',()=>{$('sourceStat').textContent=`${source.value.split('\n').length} lines`;});
+await loadDemo();
+</script>
+</body>
+</html>
