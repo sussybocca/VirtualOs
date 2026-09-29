@@ -1,0 +1,154 @@
+name: VOS ZIP Sync + Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: "ZIP in the repository to extract (for example incoming/VirtualOs-update.zip). Leave blank to use the newest incoming/*.zip."
+        required: false
+        default: ""
+      commit_changes:
+        description: "Commit extracted/generated changes back to this branch"
+        required: true
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "incoming/*.zip"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vos-sync-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync-build-verify:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_DIR: build-ci
+      DIST_DIR: dist-ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install native + WASM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang lld unzip rsync zip
+
+      - name: Resolve optional update ZIP
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested='${{ github.event.inputs.zip_path }}'
+          archive=""
+          if [[ -n "$requested" ]]; then
+            [[ -f "$requested" ]] || { echo "Requested ZIP not found: $requested" >&2; exit 2; }
+            archive="$requested"
+          elif compgen -G 'incoming/*.zip' > /dev/null; then
+            archive="$(ls -1t incoming/*.zip | head -n 1)"
+          fi
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+          if [[ -n "$archive" ]]; then echo "Using update archive: $archive"; else echo "No update ZIP supplied; building repository as checked out."; fi
+
+      - name: Extract ZIP into repository
+        if: steps.archive.outputs.path != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .vos-incoming
+          mkdir -p .vos-incoming/extracted
+          unzip -q "${{ steps.archive.outputs.path }}" -d .vos-incoming/extracted
+          shopt -s dotglob nullglob
+          entries=(.vos-incoming/extracted/*)
+          source_root=".vos-incoming/extracted"
+          if [[ ${#entries[@]} -eq 1 && -d "${entries[0]}" ]]; then source_root="${entries[0]}"; fi
+          rsync -a --delete-delay \
+            --exclude '.git/' \
+            --exclude '.github/workflows/vos-sync-build.yml' \
+            --exclude 'incoming/' \
+            --exclude 'artifacts/' \
+            --exclude 'build*/' \
+            --exclude 'dist*/' \
+            "$source_root/" ./
+          rm -rf .vos-incoming
+
+      - name: Rebuild C++20 browser WASM core
+        run: |
+          chmod +x tools/build-browser-wasm.sh tools/sync-runtime.sh
+          ./tools/build-browser-wasm.sh
+          ./tools/sync-runtime.sh
+
+      - name: Verify browser ABI + multi-app compiler
+        run: npm test
+
+      - name: Build native C++20 VOS compiler
+        run: |
+          cmake -S . -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$BUILD_DIR"
+          "$BUILD_DIR/vos" --version
+
+      - name: Compile multi-app VOS example
+        run: |
+          rm -rf "$DIST_DIR"
+          "$BUILD_DIR/vos" check examples/VIR-multiapp.vos
+          "$BUILD_DIR/vos" build examples/VIR-multiapp.vos -o "$DIST_DIR" --opt 3
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('dist-ci/manifest.json')
+          m=json.loads(p.read_text())
+          assert m.get('abi') == 2, m.get('abi')
+          apps=m.get('apps', [])
+          assert len(apps) >= 10, len(apps)
+          ids=[a.get('id') for a in apps]
+          assert len(ids) == len(set(ids)), 'duplicate app ids'
+          print(f"native manifest ABI={m['abi']} apps={len(apps)}")
+          PY
+
+      - name: Assemble release ZIPs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifacts
+          mkdir -p artifacts/.browser-release
+          cp -a browser/. artifacts/.browser-release/
+          cp -a examples/VIR-browser.vos examples/VIR-multiapp.vos artifacts/.browser-release/
+          cp README.md LICENSE artifacts/.browser-release/
+          (cd artifacts/.browser-release && zip -qr ../VOS-browser-ABI2.zip .)
+          rm -rf artifacts/.browser-release
+          zip -qr artifacts/VirtualOs-Vos1.2-Advanced-source.zip . \
+            -x '.git/*' 'incoming/*' 'artifacts/*' 'build-*/*' 'dist-*/*' '*.zip'
+          cp -a "$DIST_DIR" artifacts/native-multiapp-build
+
+      - name: Upload rebuilt project + runtime artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vos-abi2-build-${{ github.run_number }}
+          if-no-files-found: error
+          compression-level: 6
+          path: |
+            artifacts/VirtualOs-Vos1.2-Advanced-source.zip
+            artifacts/VOS-browser-ABI2.zip
+            artifacts/native-multiapp-build/
+            browser/vos-compiler.wasm
+
+      - name: Commit synchronized sources and generated WASM
+        if: (github.event_name == 'push' && steps.archive.outputs.path != '') || (github.event_name == 'workflow_dispatch' && github.event.inputs.commit_changes == 'true')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A ':!incoming/*.zip' ':!artifacts/' ':!build-ci/' ':!dist-ci/'
+          if git diff --cached --quiet; then
+            echo "No synchronized changes to commit."
+          else
+            git commit -m "build(vos): sync ZIP update and rebuild ABI 2 artifacts"
+            git push
+          fi
