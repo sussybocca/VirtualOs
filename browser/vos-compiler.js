@@ -11,7 +11,7 @@ const TD = new TextDecoder();
 
 export const BROWSER_DEMO_PROFILE = Object.freeze({
   name: 'VOS Browser Demo',
-  version: '0.4.0',
+  version: '0.5.0',
   abi: 2,
   approximateFeatureCoverage: 84,
   enabled: Object.freeze([
@@ -23,7 +23,8 @@ export const BROWSER_DEMO_PROFILE = Object.freeze({
     'VXE/VIMG/VHW/VLIB/VDBG containers', 'VOS browser runtime',
     'display/graphics/input/filesystem/terminal/compositor/desktop services',
     'declarative app manifests', 'runtime renderer registry', 'app capabilities and lifecycle APIs',
-    'inter-app events', 'workspace snapshots', 'app storage', 'notifications and clipboard services'
+    'inter-app events', 'workspace snapshots', 'app storage', 'notifications and clipboard services',
+    'PAGE ABI 1 multi-file projects', 'strict PAGE timeout/operation/memory policies', 'declarative PAGE UI bytecode'
   ]),
   nativeOnly: Object.freeze([
     '@domain metal', 'custom isa declarations', 'raw asm declarations',
@@ -157,7 +158,8 @@ function appScalar(raw, fallback=''){
 function appFromDecl(d){
   const p=parseProps(d.body), id=String(appScalar(p.id,d.name)), renderer=String(appScalar(p.renderer,p.kind||'panel'));
   const caps=String(appScalar(p.capabilities,'')).split(',').map(x=>x.trim()).filter(Boolean);
-  return {id,title:String(appScalar(p.title,d.name)),renderer,kind:renderer,icon:String(appScalar(p.icon,'APP')),description:String(appScalar(p.description,'')),width:Number(appScalar(p.width,640))||640,height:Number(appScalar(p.height,420))||420,singleton:appScalar(p.singleton,true)!==false,desktop:appScalar(p.desktop,true)!==false,capabilities:caps,accent:Number(appScalar(p.accent,0x69b7ffff))>>>0,content:String(appScalar(p.content,'')),file:String(appScalar(p.file,'')),url:String(appScalar(p.url,'')),command:String(appScalar(p.command,'')),shortcut:String(appScalar(p.shortcut,'')),category:String(appScalar(p.category,'custom')),source:d.name};
+  const pages=String(appScalar(p.pages,p.file||'')).split(',').map(x=>x.trim()).filter(x=>x.endsWith('.page'));
+  return {id,title:String(appScalar(p.title,d.name)),renderer,kind:renderer,icon:String(appScalar(p.icon,'APP')),description:String(appScalar(p.description,'')),width:Number(appScalar(p.width,640))||640,height:Number(appScalar(p.height,420))||420,singleton:appScalar(p.singleton,true)!==false,desktop:appScalar(p.desktop,true)!==false,capabilities:caps,accent:Number(appScalar(p.accent,0x69b7ffff))>>>0,content:String(appScalar(p.content,'')),file:String(appScalar(p.file,'')),pages,entryPage:String(appScalar(p.entryPage,appScalar(p.entry,pages[0]||''))),pageStrict:appScalar(p.pageStrict,renderer==='page')!==false,url:String(appScalar(p.url,'')),command:String(appScalar(p.command,'')),shortcut:String(appScalar(p.shortcut,'')),category:String(appScalar(p.category,'custom')),source:d.name};
 }
 function manifestFor(m,hash){return {name:m.name,version:m.version,architecture:m.architecture||'V74',domain:m.domain,sourceHash:hash,abi:2,compiler:{name:BROWSER_DEMO_PROFILE.name,version:BROWSER_DEMO_PROFILE.version,profile:'browser-demo',featureCoverage:BROWSER_DEMO_PROFILE.approximateFeatureCoverage,nativeOnly:[...BROWSER_DEMO_PROFILE.nativeOnly]},hardware:{components:m.hardware.components,regions:m.hardware.regions.map(({span,...r})=>r),devices:m.hardware.devices},apps:m.metadata.filter(d=>d.kind==='app').map(appFromDecl),functions:m.procs.map(p=>({name:p.name,returnType:p.returnType,pure:p.pure,effects:[...p.effects]})),metadata:m.metadata.map(d=>({kind:d.kind,name:d.name,header:tokenSource(d.header),body:tokenSource(d.body)}))};}
 

@@ -22,7 +22,7 @@ Build products: manifest.json, module.js, module.wasm, .vxe, .vimg, .vhw, .vlib,
 )";}
 struct CompileResult{SemanticModel sem;IRModule ir;};
 static CompileResult compileFront(const fs::path&p){auto src=readText(p);Lexer lx(p.string(),src);auto tok=lx.lex();for(auto&d:lx.diagnostics())printDiag(d);Parser ps(p.string(),std::move(tok));auto ast=ps.parse();SemanticAnalyzer sa;auto sem=sa.analyze(std::move(ast));Lowerer lo;auto ir=lo.lower(sem);return{std::move(sem),std::move(ir)};}
-int main(int argc,char**argv){try{if(argc<2){usage();return 1;}std::string cmd=argv[1];if(cmd=="--version"||cmd=="version"){std::cout<<"VOS Compiler 0.4.0 (VOS ABI 2)\n";return 0;}if(cmd=="new"){if(argc<3)throw std::runtime_error("new requires a directory");fs::path dir=argv[2];fs::create_directories(dir);std::string starter=R"VOS(@vos 1.0;
+int main(int argc,char**argv){try{if(argc<2){usage();return 1;}std::string cmd=argv[1];if(cmd=="--version"||cmd=="version"){std::cout<<"VOS Compiler 0.5.0 (VOS ABI 2 / PAGE ABI 1)\n";return 0;}if(cmd=="new"){if(argc<3)throw std::runtime_error("new requires a directory");fs::path dir=argv[2];fs::create_directories(dir);std::string starter=R"VOS(@vos 1.0;
 @domain kernel;
 
 unit os::starter {

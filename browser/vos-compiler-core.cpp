@@ -1,4 +1,4 @@
-// VOS Browser Compiler Core 0.4 (C++20 / WASM ABI 2)
+// VOS Browser Compiler Core 0.5 (C++20 / WASM ABI 2 + PAGE ABI 1)
 // Freestanding helpers used by vos-compiler.js. This intentionally avoids a libc
 // dependency so GitHub Actions can compile it with stock clang++ --target=wasm32.
 
@@ -8,13 +8,36 @@ using u64 = unsigned long long;
 extern "C" {
 
 __attribute__((export_name("vos_core_version")))
-u32 vos_core_version() { return 0x000400u; }
+u32 vos_core_version() { return 0x000500u; }
 
 __attribute__((export_name("vos_app_abi_version")))
 u32 vos_app_abi_version() { return 2u; }
 
 __attribute__((export_name("vos_max_apps")))
 u32 vos_max_apps() { return 4096u; }
+
+__attribute__((export_name("vos_page_abi_version")))
+u32 vos_page_abi_version() { return 1u; }
+
+// Hard PAGE ceilings. These mirror browser/vos-page.js and are intentionally
+// exported from the C++20 WASM core so CI and host integrations can verify policy.
+__attribute__((export_name("vos_page_render_budget_ms")))
+u32 vos_page_render_budget_ms() { return 16u; }
+
+__attribute__((export_name("vos_page_action_budget_ms")))
+u32 vos_page_action_budget_ms() { return 100u; }
+
+__attribute__((export_name("vos_page_event_budget_ms")))
+u32 vos_page_event_budget_ms() { return 50u; }
+
+__attribute__((export_name("vos_page_startup_budget_ms")))
+u32 vos_page_startup_budget_ms() { return 500u; }
+
+__attribute__((export_name("vos_page_max_ops")))
+u32 vos_page_max_ops() { return 100000u; }
+
+__attribute__((export_name("vos_page_max_memory_bytes")))
+u32 vos_page_max_memory_bytes() { return 32u * 1024u * 1024u; }
 
 __attribute__((export_name("fnv1a_step")))
 u32 fnv1a_step(u32 h, u32 byte) {

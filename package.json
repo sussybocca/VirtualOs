@@ -1,13 +1,14 @@
 {
   "name": "vos-sdk",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
-  "description": "Virtual OS SDK / VOS ABI 2 compiler, browser runtime, and immersive Forge workbench",
+  "description": "Virtual OS SDK / VOS ABI 2 + PAGE ABI 1 strict multi-file app platform",
   "scripts": {
-    "test": "node tests/verify-v12.mjs",
+    "test": "node tests/verify-v12.mjs && node tests/verify-v13-page.mjs",
     "build:wasm": "bash tools/build-browser-wasm.sh",
     "build:native": "cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release --config Release",
-    "verify": "npm run test"
+    "verify": "npm run test",
+    "test:page": "node tests/verify-v13-page.mjs"
   }
 }

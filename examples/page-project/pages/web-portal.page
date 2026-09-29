@@ -1,0 +1,45 @@
+@page 1.0;
+app "web-portal";
+
+page Home route "/" {
+    budget {
+        startup <= 120ms;
+        render <= 12ms;
+        event <= 24ms;
+        action <= 40ms;
+        total <= 2000ms;
+        ops <= 12000;
+        memory <= 4MiB;
+    }
+
+    permissions {
+        ui.draw;
+        ui.input;
+        events.emit;
+    }
+
+    state {
+        status: string = "READY";
+        count: i32 = 0;
+    }
+
+    view {
+        heading "Web Portal";
+        badge "STRICT VOS PAGE / SANDBOXED";
+        text "This interface is compiled from a .page file, not from VOS source.";
+        metric "Interactions" bind count;
+        button "Run bounded action" -> pulse;
+    }
+
+    action pulse timeout 20ms ops 64 {
+        inc count 1;
+        set status = "ACTION COMPLETE";
+        emit "page:interaction";
+        invalidate;
+    }
+
+    on mount timeout 30ms ops 64 {
+        set status = "MOUNTED";
+        emit "page:mounted";
+    }
+}

@@ -20,8 +20,12 @@ const coreBytes = await readFile(new URL('../browser/vos-compiler.wasm', import.
 const { instance } = await WebAssembly.instantiate(coreBytes, {});
 const ex = instance.exports;
 assert.equal(ex.vos_app_abi_version(), 2);
+assert.equal(ex.vos_page_abi_version(), 1);
+assert.equal(ex.vos_page_render_budget_ms(), 16);
+assert.equal(ex.vos_page_action_budget_ms(), 100);
+assert.equal(ex.vos_page_max_ops(), 100000);
 assert.ok(ex.vos_max_apps() >= 4096);
-assert.ok(ex.vos_core_version() >= 0x000400);
+assert.ok(ex.vos_core_version() >= 0x000500);
 assert.equal(ex.vos_validate_app_flags(0x0f), 1);
 assert.equal(ex.vos_validate_app_flags(0x10), 0);
 

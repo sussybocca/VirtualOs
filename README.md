@@ -161,15 +161,61 @@ library.json
 
 ## VOS ABI 2 multi-application browser platform
 
-VOS 1.2 upgrades the browser desktop from a fixed set of application names to manifest-driven applications. Add top-level `app Name { ... }` declarations and the compiler emits them into `manifest.json`; the runtime discovers and installs them automatically. `examples/VIR-multiapp.vos` demonstrates twelve independent apps, including a generic `panel` application that proves the shell no longer needs a hardcoded renderer for every app.
+VOS App ABI 2 upgrades the browser desktop from a fixed set of application names to manifest-driven applications. Add top-level `app Name { ... }` declarations and the compiler emits them into `manifest.json`; the runtime discovers and installs them automatically. `examples/VIR-multiapp.vos` demonstrates twelve independent apps, including a generic `panel` application that proves the shell no longer needs a hardcoded renderer for every app.
 
 The ABI 2 browser runtime also includes a renderer registry, per-app capability grants, lifecycle/event messaging, per-app persistent storage, workspace snapshot/restore, notifications, clipboard services, a searchable command palette, maximize/restore window state, arbitrary app categories, runtime renderer plugins, live telemetry, import/export, autosave recovery, artifact downloads, and the rebuilt C++20 WebAssembly compiler core.
 
 The root `index.html` and `browser/index.html` provide the immersive **VOS Forge** interface: source editor, compile/boot controls, live guest display, artifact inspector, app graph, diagnostics, runtime telemetry, fullscreen guest mode, drag/drop source loading, and recovery autosave.
 
+
+## VOS 1.3 strict `.page` application language
+
+VOS 1.3 keeps `.vos` for the operating system, hardware, services, processes, drivers, and app registration, but moves application UI/interaction code into a separate **PAGE ABI 1** language. Every strict app declares one or more `.page` files. A PAGE file is not normal VOS syntax: it has mandatory resource budgets, a capability allow-list, typed local state, declarative views, and bounded action/lifecycle bytecode.
+
+```vos
+app NotesStudio {
+    id = "notes";
+    renderer = "page";
+    pages = "pages/notes.page,pages/notes-settings.page";
+    entryPage = "pages/notes.page";
+    pageStrict = true;
+    capabilities = "ui.draw,ui.input,events.emit,storage.read,storage.write,notifications.post";
+}
+```
+
+```text
+@page 1.0;
+app "notes";
+
+page Home route "/" {
+    budget {
+        startup <= 120ms;
+        render <= 12ms;
+        event <= 24ms;
+        action <= 40ms;
+        total <= 2000ms;
+        ops <= 12000;
+        memory <= 4MiB;
+    }
+    permissions { ui.draw; ui.input; events.emit; }
+    state { count: i32 = 0; }
+    view {
+        heading "Nebula Notes";
+        metric "Interactions" bind count;
+        button "Run bounded action" -> pulse;
+    }
+    action pulse timeout 20ms ops 64 { inc count 1; invalidate; }
+    on mount timeout 30ms ops 64 { emit "page:mounted"; }
+}
+```
+
+PAGE has hard host ceilings even if a source file asks for more: **16 ms render**, **100 ms action**, **50 ms event**, **500 ms startup**, **5 s cumulative execution**, **100,000 declared operations**, **32 MiB state memory**, and a **256 KiB PAGE source limit**. PAGE also limits handlers, view nodes, state slots, nesting depth, and compiled handler size. There is no arbitrary JavaScript, `eval`, or unbounded loop construct in PAGE. The compiler verifies operation permissions, state targets, UI permissions, and cross-file route uniqueness. The runtime checks handler wall time, operation counts, state size, cumulative execution, declared permissions, and parent-app capability grants; the first policy violation quarantines that PAGE instance.
+
+`VOS.compileProject(...)` compiles a whole virtual project (multiple `.vos` modules plus many `.page` files), semantically checks every VOS module, merges their app declarations, verifies that every strict app has its referenced PAGE files, emits project/PAGE indexes and per-file PAGE artifacts, and boots the descriptors into the `VOSPageSandbox`. See `examples/page-project/` and `docs/PAGE-ABI1.md`. The Forge UI is now a multi-file project studio with a VOS/PAGE file tree, tabs, live PAGE policy inspection, autosave, import, create-VOS/create-PAGE, duplicate/delete controls, artifact access, and a larger immersive guest-machine display.
+
 ## GitHub ZIP sync + reproducible build
 
-`.github/workflows/vos-sync-build.yml` can ingest an update ZIP from `incoming/`, extract/synchronize it, rebuild `browser/vos-compiler.wasm` from `browser/vos-compiler-core.cpp`, compile the native C++20 toolchain, test ABI 2 + multi-app behavior, compile `examples/VIR-multiapp.vos`, and upload fresh project/browser ZIPs as GitHub Actions artifacts. A manual run can optionally commit the synchronized source and generated WASM back to the branch.
+`.github/workflows/vos-sync-build.yml` can ingest an update ZIP from `incoming/`, extract/synchronize it, rebuild `browser/vos-compiler.wasm` from `browser/vos-compiler-core.cpp`, compile the native C++20 toolchain, test ABI 2 + PAGE ABI 1 behavior (including auxiliary `.vos` modules and strict PAGE rules), compile `examples/page-project/main.vos`, and upload fresh project/browser ZIPs as GitHub Actions artifacts. A manual run can optionally commit the synchronized source and generated WASM back to the branch.
 
 Local verification is simply:
 
