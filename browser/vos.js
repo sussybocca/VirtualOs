@@ -1,4 +1,4 @@
-/* VOS Browser SDK 0.3 — public browser API */
+/* VOS Browser SDK 0.4 — public browser API */
 import { VOSRuntime, bootVOS } from './vos-runtime.js';
 import { VOSBrowserCompiler, BROWSER_DEMO_PROFILE, moduleFromBuild, downloadArtifact } from './vos-compiler.js';
 

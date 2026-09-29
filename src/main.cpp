@@ -9,7 +9,7 @@ namespace fs=std::filesystem;
 using namespace vos;
 static void printDiag(const Diagnostic&d){std::cerr<<d.span.file<<":"<<d.span.line<<":"<<d.span.column<<": "<<levelName(d.level)<<"["<<d.code<<"] "<<d.message<<"\n";}
 static bool hasErrors(const std::vector<Diagnostic>&d){return std::any_of(d.begin(),d.end(),[](auto&x){return x.level==Diagnostic::Level::Error;});}
-static void usage(){std::cout<<R"(VOS Toolchain 0.3
+static void usage(){std::cout<<R"(VOS Toolchain 0.4
 Usage:
   vos new <directory>
   vos check <file.vos>
@@ -22,11 +22,11 @@ Build products: manifest.json, module.js, module.wasm, .vxe, .vimg, .vhw, .vlib,
 )";}
 struct CompileResult{SemanticModel sem;IRModule ir;};
 static CompileResult compileFront(const fs::path&p){auto src=readText(p);Lexer lx(p.string(),src);auto tok=lx.lex();for(auto&d:lx.diagnostics())printDiag(d);Parser ps(p.string(),std::move(tok));auto ast=ps.parse();SemanticAnalyzer sa;auto sem=sa.analyze(std::move(ast));Lowerer lo;auto ir=lo.lower(sem);return{std::move(sem),std::move(ir)};}
-int main(int argc,char**argv){try{if(argc<2){usage();return 1;}std::string cmd=argv[1];if(cmd=="--version"||cmd=="version"){std::cout<<"VOS Compiler 0.3.0 (VOS ABI 1)\n";return 0;}if(cmd=="new"){if(argc<3)throw std::runtime_error("new requires a directory");fs::path dir=argv[2];fs::create_directories(dir);std::string starter=R"VOS(@vos 1.0;
+int main(int argc,char**argv){try{if(argc<2){usage();return 1;}std::string cmd=argv[1];if(cmd=="--version"||cmd=="version"){std::cout<<"VOS Compiler 0.4.0 (VOS ABI 2)\n";return 0;}if(cmd=="new"){if(argc<3)throw std::runtime_error("new requires a directory");fs::path dir=argv[2];fs::create_directories(dir);std::string starter=R"VOS(@vos 1.0;
 @domain kernel;
 
 unit os::starter {
-  identity { name = "StarterOS"; version = 0.1.0; architecture = vos74; abi = vosabi::1; }
+  identity { name = "StarterOS"; version = 0.1.0; architecture = vos74; abi = vosabi::2; }
   compile { safety = strict; bounds = checked; overflow = trap; nullability = forbidden; optimization = aggressive; }
 }
 

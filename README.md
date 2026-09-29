@@ -159,7 +159,27 @@ library.json
 *.vdbg
 ```
 
-## Browser Demo (~70% profile)
+## VOS ABI 2 multi-application browser platform
+
+VOS 1.2 upgrades the browser desktop from a fixed set of application names to manifest-driven applications. Add top-level `app Name { ... }` declarations and the compiler emits them into `manifest.json`; the runtime discovers and installs them automatically. `examples/VIR-multiapp.vos` demonstrates twelve independent apps, including a generic `panel` application that proves the shell no longer needs a hardcoded renderer for every app.
+
+The ABI 2 browser runtime also includes a renderer registry, per-app capability grants, lifecycle/event messaging, per-app persistent storage, workspace snapshot/restore, notifications, clipboard services, a searchable command palette, maximize/restore window state, arbitrary app categories, runtime renderer plugins, live telemetry, import/export, autosave recovery, artifact downloads, and the rebuilt C++20 WebAssembly compiler core.
+
+The root `index.html` and `browser/index.html` provide the immersive **VOS Forge** interface: source editor, compile/boot controls, live guest display, artifact inspector, app graph, diagnostics, runtime telemetry, fullscreen guest mode, drag/drop source loading, and recovery autosave.
+
+## GitHub ZIP sync + reproducible build
+
+`.github/workflows/vos-sync-build.yml` can ingest an update ZIP from `incoming/`, extract/synchronize it, rebuild `browser/vos-compiler.wasm` from `browser/vos-compiler-core.cpp`, compile the native C++20 toolchain, test ABI 2 + multi-app behavior, compile `examples/VIR-multiapp.vos`, and upload fresh project/browser ZIPs as GitHub Actions artifacts. A manual run can optionally commit the synchronized source and generated WASM back to the branch.
+
+Local verification is simply:
+
+```bash
+npm test
+npm run build:wasm
+npm run build:native
+```
+
+## Browser Demo (ABI 2 advanced profile)
 
 The `browser/` directory is the zero-install VOS demo path. It uses the same language style and VOS runtime, but deliberately keeps some advanced features native-only.
 

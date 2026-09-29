@@ -1,8 +1,8 @@
 /*
- * VOS Browser Compiler 0.3 — Browser Demo Profile
+ * VOS Browser Compiler 0.4 — Advanced Browser Profile
  * ------------------------------------------------
  * Same VOS source syntax, browser-oriented frontend/semantic checks/backend.
- * This edition intentionally exposes the Browser Demo capability profile (~70%).
+ * ABI 2 adds declarative applications, renderer plugins, capabilities, and workspace services.
  * Native-only/Metal features are rejected explicitly rather than simulated.
  */
 
@@ -11,9 +11,9 @@ const TD = new TextDecoder();
 
 export const BROWSER_DEMO_PROFILE = Object.freeze({
   name: 'VOS Browser Demo',
-  version: '0.3.0',
-  abi: 1,
-  approximateFeatureCoverage: 70,
+  version: '0.4.0',
+  abi: 2,
+  approximateFeatureCoverage: 84,
   enabled: Object.freeze([
     'safe/kernel domains', 'core scalar and parameterized types', 'unit literals',
     'strict narrowing checks', 'effects/contracts', 'hardware machine declarations',
@@ -21,7 +21,9 @@ export const BROWSER_DEMO_PROFILE = Object.freeze({
     'tasks/channels', 'state machines', 'browser target metadata',
     'AOT JavaScript backend', 'pure i32/u32 WebAssembly backend',
     'VXE/VIMG/VHW/VLIB/VDBG containers', 'VOS browser runtime',
-    'display/graphics/input/filesystem/terminal/compositor/desktop services'
+    'display/graphics/input/filesystem/terminal/compositor/desktop services',
+    'declarative app manifests', 'runtime renderer registry', 'app capabilities and lifecycle APIs',
+    'inter-app events', 'workspace snapshots', 'app storage', 'notifications and clipboard services'
   ]),
   nativeOnly: Object.freeze([
     '@domain metal', 'custom isa declarations', 'raw asm declarations',
@@ -59,7 +61,7 @@ const ID = 'identifier', NUM = 'number', STR = 'string', CHR = 'character', SYM 
 const OPS = ['--[','-->','::',':=','<-','->','=>','..','==','!=','<=','>=','<<','>>','&&','||','++','--','+=','-=','*=','/=','?.'];
 const TOP = new Map([
   ['domain','domain'],['unit','unit'],['import','import'],['hardware','hardware'],['memoryspace','memoryspace'],
-  ['device','device'],['shared','shared'],['interrupt','interrupt'],['proc','proc'],['pure','proc'],['driver','driver'],
+  ['device','device'],['app','app'],['shared','shared'],['interrupt','interrupt'],['proc','proc'],['pure','proc'],['driver','driver'],
   ['process','process'],['task','task'],['channel','channel'],['state','state'],['machine','machine'],['isa','isa'],
   ['target','target'],['comptime','comptime'],['asm','asm']
 ]);
@@ -94,7 +96,7 @@ export class VOSBrowserParser {
   peek(n=0){return this.t[this.i+n]??this.t[this.t.length-1];} end(){return this.peek().kind===END;} take(){return this.end()?this.peek():this.t[this.i++];} match(x){return this.peek().text===x;} consume(x){if(this.match(x)){this.i++;return true;}return false;}
   err(t,c,m){this.diagnostics.push(diagnostic('error',c,m,t,this.file));}
   balanced(open,close){const r=[];if(!this.consume(open)){this.err(this.peek(),'VOS-E0100',`expected '${open}'`);return r;}let d=1;while(!this.end()&&d){const x=this.take();if(x.text===open)d++;else if(x.text===close){if(--d===0)break;}if(d)r.push(x);}if(d)this.err(this.peek(),'VOS-E0101','unterminated block');return r;}
-  inferName(kind,h){if(kind==='import')return tokenSource(h.filter(x=>x.text!=='import'));if(kind==='comptime')return 'comptime';if(kind==='shared'||kind==='channel'){for(let i=h.length-1;i>=0;i--)if(h[i].kind===ID&&!['shared','channel','atomic'].includes(h[i].text))return h[i].text;}const skip=new Set(['domain','unit','import','hardware','machine','memoryspace','device','shared','interrupt','proc','pure','driver','process','task','channel','state','isa','target','comptime','asm','const','atomic']);for(const x of h)if(x.kind===ID&&!skip.has(x.text))return x.text;return kind;}
+  inferName(kind,h){if(kind==='import')return tokenSource(h.filter(x=>x.text!=='import'));if(kind==='comptime')return 'comptime';if(kind==='shared'||kind==='channel'){for(let i=h.length-1;i>=0;i--)if(h[i].kind===ID&&!['shared','channel','atomic'].includes(h[i].text))return h[i].text;}const skip=new Set(['domain','unit','import','hardware','machine','memoryspace','device','app','shared','interrupt','proc','pure','driver','process','task','channel','state','isa','target','comptime','asm','const','atomic']);for(const x of h)if(x.kind===ID&&!skip.has(x.text))return x.text;return kind;}
   decl(){const first=this.take(),kind=TOP.get(first.text)||'unknown',d={kind,name:'',header:[first],body:[],span:first};if(first.text==='pure'&&this.match('proc'))d.header.push(this.take());let par=0,ang=0,br=0;while(!this.end()){
       if(kind==='interrupt'&&!par&&!ang&&!br&&this.match('preserves')){d.header.push(this.take());const ob=this.peek();const b=this.balanced('{','}');d.header.push({...ob,text:'{'},...b,{...ob,text:'}'});continue;}
       if((kind==='proc'||kind==='asm')&&!par&&!ang&&!br&&((kind==='proc'&&(this.match('effects')||this.match('contract')))||(kind==='asm'&&(this.match('preserves')||this.match('clobbers'))))){const label=this.take();d.body.push(label);const ob=this.peek();const b=this.balanced('{','}');d.body.push({...ob,text:'{'},...b,{...ob,text:'}'});continue;}
@@ -142,7 +144,22 @@ function bodyCode(body,proc,diags,{async=false}={}){const t=implTokens(body),con
   while(i<t.length){if(['var','bind'].includes(t[i].text)){const cn=t[i].text==='bind',sp=t[i++];if(t[i]?.kind!==ID){diags.push(diagnostic('error','VOS-E5000','expected variable name',sp));break;}const name=t[i++].text;if(t[i]?.text===':'){i++;let a=0;while(i<t.length){if(t[i].text==='<')a++;else if(t[i].text==='>')a--;if(a===0&&[':=','=','<-',';'].includes(t[i].text))break;i++;}}const op=t[i]?.text;if([':=','=','<-'].includes(op))i++;const e=semi(i);o+=`${ind()}${cn?'const':'let'} ${name}${i<e?' = '+expr(t,i,e):''};\n`;i=e<t.length?e+1:e;continue;}if(t[i].text==='return'){const e=semi(i+1);o+=`${ind()}return${i+1<e?' '+expr(t,i+1,e):''};\n`;i=e<t.length?e+1:e;continue;}if(t[i].text==='loop'&&t[i+1]?.text==='{'){o+=`${ind()}for (;;) {\n`;indent++;i+=2;continue;}if(t[i].text==='when'&&t[i+1]?.kind===ID&&t[i+2]?.text==='<-'&&t[i+3]?.kind===ID&&t[i+4]?.text==='{'){o+=`${ind()}{\n`;indent++;o+=`${ind()}const ${t[i+3].text} = await ${t[i+1].text}.receive();\n`;i+=5;continue;}if(t[i].text==='if'){let s=i+1;while(s<t.length&&t[s].text!=='{')s++;if(s>=t.length){diags.push(diagnostic('error','VOS-E5001',`malformed if in ${proc}`,t[i]));break;}o+=`${ind()}if (${expr(t,i+1,s)}) {\n`;indent++;i=s+1;continue;}if(t[i].text==='}'){indent=Math.max(1,indent-1);o+=`${ind()}}\n`;i++;continue;}if(t[i].text==='require'){const e=semi(i+1);o+=`${ind()}runtime.require(${expr(t,i+1,e)},${JSON.stringify(proc+': contract requirement failed')});\n`;i=e<t.length?e+1:e;continue;}const e=semi(i);if(e===i){i++;continue;}if(i+3<e&&t[i].text==='cpu'&&t[i+1].text==='.'&&t[i+2].text==='wait_interrupt'){o+=`${ind()}await cpu.wait_interrupt();\n`;i=e<t.length?e+1:e;continue;}let arrow=i;while(arrow<e&&t[arrow].text!=='<-')arrow++;if(arrow===i+1&&t[i].kind===ID){let rhsDevice=false;for(let q=arrow+1;q<e;q++)if(t[q].text==='.')rhsDevice=true;if(!rhsDevice){o+=`${ind()}${t[i].text}.send(${expr(t,arrow+1,e)});\n`;i=e<t.length?e+1:e;continue;}}const x=t.slice(i,e).map(z=>({...z,text:z.text===':='||z.text==='<-'?'=':z.text}));o+=`${ind()}${expr(x)};\n`;i=e<t.length?e+1:e;}
   return o;}
 
-function manifestFor(m,hash){return {name:m.name,version:m.version,architecture:m.architecture||'V74',domain:m.domain,sourceHash:hash,compiler:{name:BROWSER_DEMO_PROFILE.name,version:BROWSER_DEMO_PROFILE.version,profile:'browser-demo',featureCoverage:BROWSER_DEMO_PROFILE.approximateFeatureCoverage,nativeOnly:[...BROWSER_DEMO_PROFILE.nativeOnly]},hardware:{components:m.hardware.components,regions:m.hardware.regions.map(({span,...r})=>r),devices:m.hardware.devices},functions:m.procs.map(p=>({name:p.name,returnType:p.returnType,pure:p.pure,effects:[...p.effects]})),metadata:m.metadata.map(d=>({kind:d.kind,name:d.name,header:tokenSource(d.header),body:tokenSource(d.body)}))};}
+function appScalar(raw, fallback=''){
+  const s=String(raw??'').trim();
+  if(!s)return fallback;
+  if((s.startsWith('"')&&s.endsWith('"'))||(s.startsWith("'")&&s.endsWith("'"))){try{return JSON.parse(s.replace(/^'/,'"').replace(/'$/,'"'));}catch{return s.slice(1,-1);}}
+  if(s==='true')return true;if(s==='false')return false;
+  const n=s.replaceAll('_','').replace(/[ui]\d+$/,'');
+  if(/^0x[0-9a-f]+$/i.test(n))return Number.parseInt(n,16);
+  if(/^-?\d+(?:\.\d+)?$/.test(n))return Number(n);
+  return s;
+}
+function appFromDecl(d){
+  const p=parseProps(d.body), id=String(appScalar(p.id,d.name)), renderer=String(appScalar(p.renderer,p.kind||'panel'));
+  const caps=String(appScalar(p.capabilities,'')).split(',').map(x=>x.trim()).filter(Boolean);
+  return {id,title:String(appScalar(p.title,d.name)),renderer,kind:renderer,icon:String(appScalar(p.icon,'APP')),description:String(appScalar(p.description,'')),width:Number(appScalar(p.width,640))||640,height:Number(appScalar(p.height,420))||420,singleton:appScalar(p.singleton,true)!==false,desktop:appScalar(p.desktop,true)!==false,capabilities:caps,accent:Number(appScalar(p.accent,0x69b7ffff))>>>0,content:String(appScalar(p.content,'')),file:String(appScalar(p.file,'')),url:String(appScalar(p.url,'')),command:String(appScalar(p.command,'')),shortcut:String(appScalar(p.shortcut,'')),category:String(appScalar(p.category,'custom')),source:d.name};
+}
+function manifestFor(m,hash){return {name:m.name,version:m.version,architecture:m.architecture||'V74',domain:m.domain,sourceHash:hash,abi:2,compiler:{name:BROWSER_DEMO_PROFILE.name,version:BROWSER_DEMO_PROFILE.version,profile:'browser-demo',featureCoverage:BROWSER_DEMO_PROFILE.approximateFeatureCoverage,nativeOnly:[...BROWSER_DEMO_PROFILE.nativeOnly]},hardware:{components:m.hardware.components,regions:m.hardware.regions.map(({span,...r})=>r),devices:m.hardware.devices},apps:m.metadata.filter(d=>d.kind==='app').map(appFromDecl),functions:m.procs.map(p=>({name:p.name,returnType:p.returnType,pure:p.pure,effects:[...p.effects]})),metadata:m.metadata.map(d=>({kind:d.kind,name:d.name,header:tokenSource(d.header),body:tokenSource(d.body)}))};}
 
 function methodBlock(d,name){const t=d.body;for(let i=0;i<t.length;i++)if(t[i].text===name&&t[i+1]?.text==='('){let q=i+2,params=[];while(q<t.length&&t[q].text!==')'){if(t[q].kind===ID){params.push(t[q].text);while(q<t.length&&t[q].text!==','&&t[q].text!==')')q++;if(t[q]?.text===',')q++;}else q++;}if(name==='detach'&&!params.length)params=['device'];while(q<t.length&&t[q].text!=='{')q++;if(q>=t.length)return null;let dep=1,b=[];for(let z=q+1;z<t.length&&dep;z++){if(t[z].text==='{')dep++;else if(t[z].text==='}'){if(--dep===0)break;}if(dep)b.push(t[z]);}return {params,body:b};}return null;}
 function processEntry(d){const t=d.body;for(let i=0;i<t.length;i++)if(t[i].text==='entry'&&t[i+1]?.kind===ID){const name=t[i+1].text;let q=i+2,params=[];if(t[q]?.text==='('){q++;while(q<t.length&&t[q].text!==')'){if(t[q].kind===ID){params.push(t[q].text);while(q<t.length&&t[q].text!==','&&t[q].text!==')')q++;if(t[q]?.text===',')q++;}else q++;}}while(q<t.length&&t[q].text!=='{')q++;if(q>=t.length)return null;let dep=1,b=[];for(let z=q+1;z<t.length&&dep;z++){if(t[z].text==='{')dep++;else if(t[z].text==='}'){if(--dep===0)break;}if(dep)b.push(t[z]);}return {name,params,body:b};}return null;}
@@ -174,12 +191,20 @@ export class VOSBrowserCompiler {
   constructor(options={}){this.options=options;this.profile=BROWSER_DEMO_PROFILE;}
   async compile(source, options={}){
     const file=options.file||'<browser>.vos', core=await loadCore(options.coreURL).catch(()=>null);const lx=new VOSBrowserLexer(file,source),tokens=lx.lex();const ps=new VOSBrowserParser(file,tokens),program=ps.parse();program.diagnostics.unshift(...lx.diagnostics);const sem=analyze(program);const hash=await sourceHash(source,core);const diagnostics=[...sem.diagnostics];const hasErrors=()=>diagnostics.some(d=>d.level==='error');if(hasErrors())return {success:false,diagnostics,profile:this.profile,program,semantic:sem};
-    const manifest=manifestFor(sem,hash),manifestJson=JSON.stringify(manifest,null,2),moduleJS=emitJS(sem,manifest,diagnostics);if(hasErrors())return {success:false,diagnostics,profile:this.profile,program,semantic:sem};const wasm=emitWasm(sem);const debugJson=JSON.stringify({sourceHash:hash,compiler:'browser-demo',symbols:sem.procs.map(p=>({name:p.name,kind:'procedure'}))},null,2);const libraryJson=JSON.stringify({module:sem.name,abi:1,profile:'browser-demo',exports:sem.procs.map(p=>p.name)},null,2);const emptyV74=new Uint8Array();const vhw=container('VHW0',[{name:'manifest',data:bytes(manifestJson)}]);const vlib=container('VLIB',[{name:'exports',data:bytes(libraryJson)},{name:'wasm',data:wasm},{name:'asm.v74',data:emptyV74}]);const vdbg=container('VDBG',[{name:'symbols',data:bytes(debugJson)}]);const vimg=container('VIMG',[{name:'manifest',data:bytes(manifestJson)},{name:'module.js',data:bytes(moduleJS)},{name:'module.wasm',data:wasm},{name:'asm.v74',data:emptyV74}]);const vxe=container('VXE0',[{name:'manifest',data:bytes(manifestJson)},{name:'module.js',data:bytes(moduleJS)},{name:'module.wasm',data:wasm},{name:'asm.v74',data:emptyV74},{name:'debug',data:bytes(debugJson)}]);const stem=(options.name||sem.name||'browser-os').replace(/[^A-Za-z0-9_.-]/g,'_');return {success:true,diagnostics,profile:this.profile,manifest,manifestJson,moduleJS,wasm,v74:emptyV74,debugJson,libraryJson,artifacts:{'manifest.json':bytes(manifestJson),'module.js':bytes(moduleJS),'module.wasm':wasm,'module.v74.bin':emptyV74,'symbols.json':bytes(debugJson),'library.json':bytes(libraryJson),[`${stem}.vhw`]:vhw,[`${stem}.vimg`]:vimg,[`${stem}.vxe`]:vxe,[`${stem}.vlib`]:vlib,[`${stem}.vdbg`]:vdbg},program,semantic:sem};
+    const manifest=manifestFor(sem,hash),manifestJson=JSON.stringify(manifest,null,2),moduleJS=emitJS(sem,manifest,diagnostics);if(hasErrors())return {success:false,diagnostics,profile:this.profile,program,semantic:sem};const wasm=emitWasm(sem);const debugJson=JSON.stringify({sourceHash:hash,compiler:'browser-demo',symbols:sem.procs.map(p=>({name:p.name,kind:'procedure'}))},null,2);const libraryJson=JSON.stringify({module:sem.name,abi:2,profile:'browser-advanced',exports:sem.procs.map(p=>p.name)},null,2);const emptyV74=new Uint8Array();const vhw=container('VHW0',[{name:'manifest',data:bytes(manifestJson)}]);const vlib=container('VLIB',[{name:'exports',data:bytes(libraryJson)},{name:'wasm',data:wasm},{name:'asm.v74',data:emptyV74}]);const vdbg=container('VDBG',[{name:'symbols',data:bytes(debugJson)}]);const vimg=container('VIMG',[{name:'manifest',data:bytes(manifestJson)},{name:'module.js',data:bytes(moduleJS)},{name:'module.wasm',data:wasm},{name:'asm.v74',data:emptyV74}]);const vxe=container('VXE0',[{name:'manifest',data:bytes(manifestJson)},{name:'module.js',data:bytes(moduleJS)},{name:'module.wasm',data:wasm},{name:'asm.v74',data:emptyV74},{name:'debug',data:bytes(debugJson)}]);const stem=(options.name||sem.name||'browser-os').replace(/[^A-Za-z0-9_.-]/g,'_');return {success:true,diagnostics,profile:this.profile,manifest,manifestJson,moduleJS,wasm,v74:emptyV74,debugJson,libraryJson,artifacts:{'manifest.json':bytes(manifestJson),'module.js':bytes(moduleJS),'module.wasm':wasm,'module.v74.bin':emptyV74,'symbols.json':bytes(debugJson),'library.json':bytes(libraryJson),[`${stem}.vhw`]:vhw,[`${stem}.vimg`]:vimg,[`${stem}.vxe`]:vxe,[`${stem}.vlib`]:vlib,[`${stem}.vdbg`]:vdbg},program,semantic:sem};
   }
 }
 
 export async function compileVOS(source,options={}){return new VOSBrowserCompiler(options).compile(source,options);}
 
-export async function moduleFromBuild(build){if(!build?.success)throw new Error('Cannot load failed VOS build');const url=URL.createObjectURL(new Blob([build.moduleJS],{type:'text/javascript'}));try{return await import(url);}finally{URL.revokeObjectURL(url);}}
+export async function moduleFromBuild(build){
+  if(!build?.success)throw new Error('Cannot load failed VOS build');
+  if(typeof process!=='undefined'&&process.versions?.node){
+    const b64=Buffer.from(build.moduleJS,'utf8').toString('base64');
+    return await import(`data:text/javascript;base64,${b64}`);
+  }
+  const url=URL.createObjectURL(new Blob([build.moduleJS],{type:'text/javascript'}));
+  try{return await import(url);}finally{URL.revokeObjectURL(url);}
+}
 
 export function downloadArtifact(build,name){const data=build?.artifacts?.[name];if(!data)throw new Error(`Unknown build artifact ${name}`);const blob=new Blob([data],{type:name.endsWith('.js')?'text/javascript':name.endsWith('.json')?'application/json':'application/octet-stream'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
