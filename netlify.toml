@@ -1,5 +1,23 @@
+# VOS 1.3 / PAGE ABI 1 — Netlify deployment
+#
+# IMPORTANT:
+# We intentionally do NOT publish the repository root and we do NOT publish
+# only browser/. The VOS Forge entrypoint lives at the repository root and
+# references both ./browser/* and ./examples/page-project/*.
+#
+# This build assembles only the files the browser runtime actually needs into
+# netlify-dist/. C++ sources, .github/, tools/, tests, incoming ZIPs and native
+# build files are therefore not exposed as public website files.
+
 [build]
-  publish = "browser"
+  publish = "netlify-dist"
+
+  command = "rm -rf netlify-dist && mkdir -p netlify-dist/browser netlify-dist/examples && cp index.html netlify-dist/index.html && cp browser/vos.js browser/vos-runtime.js browser/vos-compiler.js browser/vos-page.js browser/cpu-worker.js browser/vos-compiler.wasm netlify-dist/browser/ && cp -R examples/. netlify-dist/examples/ && if [ -d docs ]; then mkdir -p netlify-dist/docs && cp -R docs/. netlify-dist/docs/; fi"
+
+
+# =============================================================================
+# GLOBAL VOS SECURITY / ISOLATION
+# =============================================================================
 
 [[headers]]
   for = "/*"
@@ -8,24 +26,209 @@
     Cross-Origin-Opener-Policy = "same-origin"
     Cross-Origin-Embedder-Policy = "require-corp"
     Cross-Origin-Resource-Policy = "same-origin"
+
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "SAMEORIGIN"
 
-[[headers]]
-  for = "/*.wasm"
 
-  [headers.values]
-    Content-Type = "application/wasm"
-    Cache-Control = "public, max-age=31536000, immutable"
-
-[[headers]]
-  for = "/*.js"
-
-  [headers.values]
-    Cache-Control = "public, max-age=3600"
+# =============================================================================
+# ROOT HTML / FORGE UI
+# =============================================================================
 
 [[headers]]
   for = "/*.html"
 
   [headers.values]
-    Cache-Control = "no-cache"
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+
+# =============================================================================
+# HTML FILES INSIDE EXAMPLES/
+# =============================================================================
+
+[[headers]]
+  for = "/examples/*.html"
+
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+
+# =============================================================================
+# VOS BROWSER JAVASCRIPT
+#
+# Files covered include:
+#
+# /browser/vos.js
+# /browser/vos-runtime.js
+# /browser/vos-compiler.js
+# /browser/vos-page.js
+# /browser/cpu-worker.js
+#
+# Browser clients revalidate after deployment so an old JS runtime does not
+# remain paired with a newer VOS compiler or PAGE implementation.
+#
+# Netlify's own CDN can still keep a long-lived deploy-scoped copy.
+# =============================================================================
+
+[[headers]]
+  for = "/browser/*.js"
+
+  [headers.values]
+    Content-Type = "text/javascript; charset=utf-8"
+
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+    Netlify-CDN-Cache-Control = "public, s-maxage=31536000, must-revalidate"
+
+
+# =============================================================================
+# C++20 -> WEBASSEMBLY VOS COMPILER CORE
+#
+# /browser/vos-compiler.wasm
+#
+# IMPORTANT:
+#
+# Do NOT use:
+#
+# Cache-Control = "public, max-age=31536000, immutable"
+#
+# while this file keeps the same filename between compiler rebuilds.
+#
+# Otherwise a browser can continue using an old VOS compiler even after a new
+# GitHub Actions / Netlify deployment.
+# =============================================================================
+
+[[headers]]
+  for = "/browser/*.wasm"
+
+  [headers.values]
+    Content-Type = "application/wasm"
+
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+    Netlify-CDN-Cache-Control = "public, s-maxage=31536000, must-revalidate"
+
+
+# =============================================================================
+# ROOT EXAMPLE VOS FILES
+#
+# Examples:
+#
+# /examples/VIR.vos
+# /examples/VIR-browser.vos
+# /examples/VIR-multiapp.vos
+# =============================================================================
+
+[[headers]]
+  for = "/examples/*.vos"
+
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
+
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+    Cross-Origin-Resource-Policy = "same-origin"
+
+
+# =============================================================================
+# PAGE PROJECT VOS MODULES
+#
+# Example:
+#
+# /examples/page-project/main.vos
+#
+# This will also cover future .vos files directly inside page-project/.
+# =============================================================================
+
+[[headers]]
+  for = "/examples/page-project/*.vos"
+
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
+
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+    Cross-Origin-Resource-Policy = "same-origin"
+
+
+# =============================================================================
+# STRICT PAGE FILES
+#
+# Examples:
+#
+# /examples/page-project/pages/welcome.page
+# /examples/page-project/pages/terminal.page
+# /examples/page-project/pages/files.page
+# /examples/page-project/pages/system.page
+# /examples/page-project/pages/settings.page
+# /examples/page-project/pages/notes.page
+# /examples/page-project/pages/notes-settings.page
+# /examples/page-project/pages/telemetry.page
+# /examples/page-project/pages/clock.page
+# /examples/page-project/pages/network-center.page
+# /examples/page-project/pages/web-portal.page
+# /examples/page-project/pages/processes.page
+# /examples/page-project/pages/app-lab.page
+# =============================================================================
+
+[[headers]]
+  for = "/examples/page-project/pages/*.page"
+
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
+
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+    Cross-Origin-Resource-Policy = "same-origin"
+
+
+# =============================================================================
+# OTHER PAGE-PROJECT ASSETS
+#
+# This gives future files placed inside page-project/ the VOS isolation policy.
+# More-specific .vos/.page rules above still handle their MIME/cache behavior.
+# =============================================================================
+
+[[headers]]
+  for = "/examples/page-project/*"
+
+  [headers.values]
+    Cross-Origin-Resource-Policy = "same-origin"
+
+
+# =============================================================================
+# DOCUMENTATION
+# =============================================================================
+
+[[headers]]
+  for = "/docs/*"
+
+  [headers.values]
+    Cache-Control = "public, max-age=300, must-revalidate"
+
+    X-Content-Type-Options = "nosniff"
+
+    Cross-Origin-Resource-Policy = "same-origin"
+
+
+# =============================================================================
+# ROUTES
+# =============================================================================
+
+# Main VOS Forge interface.
+[[redirects]]
+  from = "/"
+
+  to = "/index.html"
+
+  status = 200
+
+
+# Stable shortcut for VOS Forge.
+[[redirects]]
+  from = "/forge"
+
+  to = "/index.html"
+
+  status = 200
